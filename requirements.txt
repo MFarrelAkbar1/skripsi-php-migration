@@ -1,0 +1,6 @@
+# PHP Legacy Migration Pipeline — Python dependencies
+# Install with: pip install -r requirements.txt
+# Requires Python 3.11+
+
+rich>=13.0.0
+requests>=2.31.0
