@@ -13,8 +13,12 @@ ISO/IEC 27001:2022 relevance:
 
 from __future__ import annotations
 
+import json
 import re
+import statistics
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -39,12 +43,24 @@ except ModuleNotFoundError:
 OLLAMA_BASE_URL: str = "http://localhost:11434"
 OLLAMA_MODEL: str = "deepseek-coder:6.7b"
 
+# All models used in the zero-shot LLM comparison experiment (thesis).
+COMPARISON_MODELS: list[str] = [
+    "deepseek-coder:6.7b",
+    "qwen2.5-coder:7b",
+    "codellama:7b",
+    "mistral:7b",
+    "llama3.1:8b",
+]
+
+# Number of independent inference runs per model per finding (for variance measurement).
+COMPARISON_RUNS: int = 3
+
 # Maximum characters of PHP code sent per request (context-window budget)
 MAX_CODE_CHARS: int = 2000
 
 # Only process ScanFindings with priority <= this value.
 # Priorities 1-3 = SQL Injection, XSS, Deprecated Function.
-PRIORITY_THRESHOLD: int = 3
+PRIORITY_THRESHOLD: int = 5
 
 # Ollama generation parameters
 _OLLAMA_OPTIONS: dict = {
@@ -99,6 +115,37 @@ class AIRecommendation:
 
 
 # ---------------------------------------------------------------------------
+# Comparison experiment dataclasses (zero-shot multi-model study)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModelRunMetrics:
+    """Metrics captured for one inference run of one model on one finding."""
+
+    run_index: int            # 1-indexed
+    confidence: float         # 0.0-1.0 parsed from response
+    inference_time_sec: float
+    format_valid: bool        # True when response contains CONFIDENCE: N line
+
+
+@dataclass
+class FindingComparisonResult:
+    """Aggregated per-finding results across N runs of a single model."""
+
+    file_path: str
+    line_start: int
+    vuln_type: str
+    model: str
+    runs: list[ModelRunMetrics]
+    confidence_mean: float
+    confidence_variance: float
+    confidence_stdev: float
+    format_compliance_rate: float   # fraction of runs with a valid CONFIDENCE line
+    mean_inference_time_sec: float
+
+
+# ---------------------------------------------------------------------------
 # Main AI engine class
 # ---------------------------------------------------------------------------
 
@@ -133,6 +180,7 @@ class PHPAIEngine:
         self._base_url = ollama_base_url.rstrip("/")
         self._timeout = timeout_sec
         self._generate_url = f"{self._base_url}/api/generate"
+        self._chat_url = f"{self._base_url}/api/chat"
 
     # ------------------------------------------------------------------
     # Public API
@@ -376,6 +424,56 @@ class PHPAIEngine:
             "// 1. Explanation:"
         )
 
+    def _build_chat_messages(
+        self,
+        code: str,
+        vuln_type: str,
+        context: str,
+        iso_controls: list[str],
+    ) -> list[dict[str, str]]:
+        """
+        Build system + user messages for the ``/api/chat`` endpoint.
+
+        Splitting into roles lets Ollama apply each model's native chat
+        template (ChatML for Qwen2.5-Coder, Llama-3 instruct for llama3.1,
+        Mistral instruct for mistral, etc.) so that instruction-following
+        improves across all models without changing the *content* of the
+        prompt -- the zero-shot comparison constraint is maintained.
+
+        Returns a two-element list: [system_msg, user_msg].
+        """
+        controls_str = ", ".join(iso_controls)
+        context_block = f"Context: {context}\n" if context else ""
+
+        system_content = (
+            "You are a PHP security expert and migration specialist. "
+            "You analyze PHP code for security vulnerabilities and provide "
+            "secure PHP 8.x replacements. "
+            "Always follow output format instructions exactly as given."
+        )
+
+        user_content = (
+            f"TASK: Analyze the following PHP code for a [{vuln_type}] vulnerability "
+            f"and provide a secure PHP 8.x replacement.\n"
+            f"ISO/IEC 27001:2022 Controls: {controls_str}\n"
+            f"{context_block}"
+            "\nVULNERABLE CODE:\n"
+            "```php\n"
+            f"{code}\n"
+            "```\n\n"
+            "Respond in English:\n"
+            "1. Explain the vulnerability and its security risk.\n"
+            "2. Provide the corrected PHP 8.x code in a ```php code block.\n\n"
+            "After your explanation and code fix, write exactly this on the last line:\n"
+            "CONFIDENCE: [number between 0 and 100]\n\n"
+            "Example last line: CONFIDENCE: 85\n"
+        )
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
+
     # ------------------------------------------------------------------
     # Ollama HTTP calls
     # ------------------------------------------------------------------
@@ -442,6 +540,94 @@ class PHPAIEngine:
             return ""
 
         return data.get("response", "")
+
+    def _call_ollama_timed(self, prompt: str) -> tuple[str, float]:
+        """
+        Call Ollama and return ``(response_text, elapsed_seconds)``.
+
+        Elapsed time is always recorded even on error (returns ``"", elapsed``).
+        Used by the comparison runner to capture per-run inference latency.
+        """
+        t0 = time.perf_counter()
+        text = self._call_ollama(prompt)
+        elapsed = round(time.perf_counter() - t0, 3)
+        return text, elapsed
+
+    def _call_ollama_chat(self, messages: list[dict[str, str]]) -> str:
+        """
+        POST *messages* to Ollama's ``/api/chat`` endpoint.
+
+        Unlike ``/api/generate``, ``/api/chat`` applies each model's native
+        chat template automatically.  This is required for instruction-tuned
+        models like Qwen2.5-Coder (ChatML) and Llama-3.1 (Llama-3 instruct)
+        that ignore format instructions when given a raw completion prompt.
+
+        Returns the assistant's response text, or ``""`` on any error.
+        """
+        payload: dict = {
+            "model": self._model,
+            "messages": messages,
+            "stream": False,
+            "options": _OLLAMA_OPTIONS,
+        }
+
+        try:
+            resp = requests.post(
+                self._chat_url,
+                json=payload,
+                timeout=self._timeout,
+            )
+        except requests.exceptions.ConnectionError:
+            console.print(
+                f"[yellow]AI Engine:[/yellow] Ollama not reachable at {self._base_url}"
+            )
+            return ""
+        except requests.exceptions.Timeout:
+            console.print(
+                f"[yellow]AI Engine:[/yellow] Ollama timed out after {self._timeout}s"
+            )
+            return ""
+        except requests.exceptions.RequestException as exc:
+            console.print(f"[yellow]AI Engine:[/yellow] HTTP error: {exc}")
+            return ""
+
+        if resp.status_code != 200:
+            console.print(
+                f"[yellow]AI Engine:[/yellow] Ollama /api/chat returned HTTP "
+                f"{resp.status_code}: {resp.text[:200]}"
+            )
+            return ""
+
+        try:
+            data = resp.json()
+        except ValueError:
+            console.print(
+                "[yellow]AI Engine:[/yellow] Could not parse Ollama chat JSON response"
+            )
+            return ""
+
+        return data.get("message", {}).get("content", "")
+
+    def _call_ollama_chat_timed(
+        self, messages: list[dict[str, str]]
+    ) -> tuple[str, float]:
+        """Call ``/api/chat`` and return ``(response_text, elapsed_seconds)``."""
+        t0 = time.perf_counter()
+        text = self._call_ollama_chat(messages)
+        elapsed = round(time.perf_counter() - t0, 3)
+        return text, elapsed
+
+    @staticmethod
+    def _check_format_valid(raw_text: str) -> bool:
+        """
+        Return True when the response contains a parseable ``CONFIDENCE: N`` line.
+
+        Mirrors pattern 1 from ``_extract_confidence()`` -- any text that would
+        yield a non-zero confidence from that pattern passes this check.
+        """
+        return bool(re.search(
+            r"CONFIDENCE[^0-9\n]*?(\d{1,3})(?!\.\d)", raw_text, re.IGNORECASE
+        ))
 
     # ------------------------------------------------------------------
     # Response parsing
@@ -794,3 +980,286 @@ def run_ai_analysis(
     """
     engine = PHPAIEngine(model=model, ollama_base_url=ollama_base_url)
     return engine.analyze_findings(findings)
+
+
+# ---------------------------------------------------------------------------
+# Zero-shot LLM comparison (thesis experiment)
+# ---------------------------------------------------------------------------
+
+
+def run_llm_comparison(
+    findings: list[ScanFinding],
+    models: list[str] | None = None,
+    runs_per_finding: int = COMPARISON_RUNS,
+    ollama_base_url: str = OLLAMA_BASE_URL,
+    reports_dir: Path | None = None,
+) -> dict:
+    """
+    Zero-shot comparison of multiple LLMs on the same Semgrep findings.
+
+    Each eligible finding (priority <= PRIORITY_THRESHOLD) is sent to every
+    model ``runs_per_finding`` times using *identical* prompts and temperature
+    0.1.  Metrics captured per run: confidence score, inference time (seconds),
+    and whether the response contained a valid ``CONFIDENCE: N`` line.
+
+    Parameters
+    ----------
+    findings:
+        Output of ``scanner.run_scan().findings``.  Only findings with
+        ``priority <= PRIORITY_THRESHOLD`` are processed.
+    models:
+        Ollama model identifiers to compare.  Defaults to ``COMPARISON_MODELS``
+        (all 5 thesis models).
+    runs_per_finding:
+        Independent runs per model per finding.  Defaults to ``COMPARISON_RUNS``
+        (3).  Used to measure confidence variance across runs.
+    ollama_base_url:
+        Base URL for the local Ollama server.
+    reports_dir:
+        When provided, the report is written to
+        ``reports_dir/llm_comparison_<timestamp>.json``.
+
+    Returns
+    -------
+    dict
+        JSON-serializable comparison report.  Top-level keys:
+        ``generated_at``, ``timestamp``, ``models_compared``,
+        ``runs_per_finding``, ``temperature``, ``prompt_strategy``,
+        ``findings_count``, ``results``.
+    """
+    if models is None:
+        models = COMPARISON_MODELS
+
+    eligible = [f for f in findings if f.priority <= PRIORITY_THRESHOLD]
+    if not eligible:
+        console.print("[dim]LLM comparison: no eligible findings (priority <= 3).[/dim]")
+        empty: dict = {
+            "generated_at": datetime.now().isoformat(),
+            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "models_compared": list(models),
+            "runs_per_finding": runs_per_finding,
+            "temperature": _OLLAMA_OPTIONS["temperature"],
+            "prompt_strategy": "zero-shot-chat",
+            "findings_count": 0,
+            "results": {},
+        }
+        return empty
+
+    # Use a throw-away engine only for prompt building (model name does not
+    # affect prompt content -- all methods are effectively static).
+    _builder = PHPAIEngine(ollama_base_url=ollama_base_url)
+
+    # Build chat messages once per finding -- content IDENTICAL across all models.
+    # Using /api/chat lets Ollama apply each model's native chat template
+    # (ChatML for Qwen2.5-Coder, Llama-3 instruct for llama3.1:8b, Mistral
+    # instruct for mistral:7b) without changing the prompt content.
+    # This is the core zero-shot constraint: same system+user text, different model.
+    chat_prompts: list[tuple[ScanFinding, list[dict[str, str]]]] = []
+    for finding in eligible:
+        truncated = finding.code_snippet[:MAX_CODE_CHARS]
+        context_str = (
+            f"File: {finding.file_path}, "
+            f"line {finding.line_start}. "
+            f"Semgrep rule: {finding.rule_id}. "
+            f"Finding: {finding.message}"
+        )
+        messages = _builder._build_chat_messages(
+            truncated, finding.vuln_type, context_str, finding.iso_controls
+        )
+        chat_prompts.append((finding, messages))
+
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+
+    report: dict = {
+        "generated_at": now.isoformat(),
+        "timestamp": timestamp,
+        "models_compared": list(models),
+        "runs_per_finding": runs_per_finding,
+        "temperature": _OLLAMA_OPTIONS["temperature"],
+        "prompt_strategy": "zero-shot-chat",
+        "findings_count": len(eligible),
+        "results": {},
+    }
+
+    for model_idx, model_name in enumerate(models, start=1):
+        console.print(
+            f"\n[bold cyan]Model {model_idx}/{len(models)}:[/bold cyan] {model_name}"
+        )
+        engine = PHPAIEngine(model=model_name, ollama_base_url=ollama_base_url)
+
+        if not engine._check_ollama_alive():
+            console.print(
+                f"[yellow]  Ollama not reachable -- skipping {model_name}[/yellow]"
+            )
+            report["results"][model_name] = {
+                "model": model_name,
+                "available": False,
+                "findings": [],
+                "summary": None,
+            }
+            continue
+
+        finding_results: list[dict] = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            total_ops = len(chat_prompts) * runs_per_finding
+            task = progress.add_task(f"[cyan]{model_name}...", total=total_ops)
+
+            for finding, messages in chat_prompts:
+                runs_data: list[dict] = []
+                confidences: list[float] = []
+                times: list[float] = []
+                format_valid_count: int = 0
+
+                for run_i in range(1, runs_per_finding + 1):
+                    progress.update(
+                        task,
+                        description=(
+                            f"[cyan]{model_name} | "
+                            f"{Path(finding.file_path).name} "
+                            f"run {run_i}/{runs_per_finding}..."
+                        ),
+                    )
+
+                    raw_text, elapsed = engine._call_ollama_chat_timed(messages)
+                    conf = engine._extract_confidence(raw_text)
+                    fmt_valid = engine._check_format_valid(raw_text)
+
+                    if fmt_valid:
+                        format_valid_count += 1
+                    confidences.append(conf)
+                    times.append(elapsed)
+                    runs_data.append({
+                        "run_index": run_i,
+                        "confidence": conf,
+                        "inference_time_sec": elapsed,
+                        "format_valid": fmt_valid,
+                    })
+                    progress.advance(task)
+
+                conf_mean = round(statistics.mean(confidences), 4)
+                conf_var = round(
+                    statistics.variance(confidences) if len(confidences) >= 2 else 0.0,
+                    4,
+                )
+                conf_stdev = round(
+                    statistics.stdev(confidences) if len(confidences) >= 2 else 0.0,
+                    4,
+                )
+                mean_time = round(statistics.mean(times), 3)
+                fmt_rate = round(format_valid_count / runs_per_finding, 4)
+
+                finding_results.append({
+                    "file_path": finding.file_path,
+                    "line_start": finding.line_start,
+                    "vuln_type": finding.vuln_type,
+                    "model": model_name,
+                    "runs": runs_data,
+                    "confidence_mean": conf_mean,
+                    "confidence_variance": conf_var,
+                    "confidence_stdev": conf_stdev,
+                    "format_compliance_rate": fmt_rate,
+                    "mean_inference_time_sec": mean_time,
+                })
+
+        # Model-level aggregated summary
+        all_conf_means = [r["confidence_mean"] for r in finding_results]
+        all_time_means = [r["mean_inference_time_sec"] for r in finding_results]
+        all_fmt_rates = [r["format_compliance_rate"] for r in finding_results]
+        total_runs = len(eligible) * runs_per_finding
+        total_fmt_ok = sum(
+            sum(1 for run in r["runs"] if run["format_valid"])
+            for r in finding_results
+        )
+
+        summary = {
+            "mean_confidence": round(statistics.mean(all_conf_means), 4) if all_conf_means else 0.0,
+            "mean_inference_time_sec": round(statistics.mean(all_time_means), 3) if all_time_means else 0.0,
+            "format_compliance_rate": round(statistics.mean(all_fmt_rates), 4) if all_fmt_rates else 0.0,
+            "total_runs": total_runs,
+            "format_compliant_runs": total_fmt_ok,
+            "non_compliant_runs": total_runs - total_fmt_ok,
+        }
+
+        report["results"][model_name] = {
+            "model": model_name,
+            "available": True,
+            "findings": finding_results,
+            "summary": summary,
+        }
+
+        console.print(
+            f"  [green]Done:[/green] "
+            f"mean_conf={summary['mean_confidence']:.1%}  "
+            f"fmt_ok={summary['format_compliance_rate']:.0%}  "
+            f"avg_time={summary['mean_inference_time_sec']:.1f}s"
+        )
+
+    if reports_dir is not None:
+        save_comparison_report(report, reports_dir)
+
+    _print_comparison_summary(report)
+    return report
+
+
+def save_comparison_report(report: dict, reports_dir: Path) -> Path:
+    """Write ``report`` to ``reports_dir/llm_comparison_<timestamp>.json``."""
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    ts = report.get("timestamp", datetime.now().strftime("%Y%m%d_%H%M%S"))
+    path = reports_dir / f"llm_comparison_{ts}.json"
+    path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    console.print(f"[dim]LLM comparison report saved -> {path}[/dim]")
+    return path
+
+
+def _print_comparison_summary(report: dict) -> None:
+    """Render a Rich table comparing all models side by side."""
+    results = report.get("results", {})
+    if not results:
+        return
+
+    tbl = Table(
+        title="LLM Zero-Shot Comparison -- Summary",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold magenta",
+    )
+    tbl.add_column("Model", no_wrap=True)
+    tbl.add_column("Avail.", justify="center", width=7)
+    tbl.add_column("Mean Conf.", justify="center", width=11)
+    tbl.add_column("Fmt OK", justify="center", width=9)
+    tbl.add_column("Avg Time(s)", justify="center", width=12)
+    tbl.add_column("Total Runs", justify="right", width=11)
+
+    for model_name, data in results.items():
+        if not data.get("available", False):
+            tbl.add_row(
+                model_name, "[red]no[/red]", "-", "-", "-", "-"
+            )
+            continue
+        s = data.get("summary") or {}
+        conf = s.get("mean_confidence", 0.0)
+        conf_style = "green" if conf >= 0.7 else "yellow" if conf >= 0.4 else "red"
+        fmt = s.get("format_compliance_rate", 0.0)
+        fmt_style = "green" if fmt >= 0.8 else "yellow" if fmt >= 0.5 else "red"
+        tbl.add_row(
+            model_name,
+            "[green]yes[/green]",
+            f"[{conf_style}]{conf:.1%}[/{conf_style}]",
+            f"[{fmt_style}]{fmt:.0%}[/{fmt_style}]",
+            str(s.get("mean_inference_time_sec", 0.0)),
+            str(s.get("total_runs", 0)),
+        )
+
+    console.print(tbl)

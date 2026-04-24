@@ -285,7 +285,6 @@ class PHPStanAnalyzer:
             str(target_path),
             f"--level={level}",
             "--error-format=json",
-            f"--php-version={php_version}",
             "--no-progress",        # suppress progress bar; keep stdout clean JSON
             "--memory-limit=512M",  # safe for 16 GB RAM; override if needed
         ]

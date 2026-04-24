@@ -9,6 +9,7 @@ dipetakan ke prioritas kerentanan dan kontrol ISO/IEC 27001:2022.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -23,11 +24,60 @@ from rich import box
 # Constants
 # ---------------------------------------------------------------------------
 
-SEMGREP_EXE = Path(
-    r"C:\Users\HP VICTUS\AppData\Roaming\Python\Python313\Scripts\semgrep.exe"
-)
+def _find_semgrep_exe() -> Path:
+    """Locate the Semgrep executable via shutil.which (searches PATH)."""
+    found = shutil.which("semgrep")
+    if found:
+        return Path(found)
+    raise FileNotFoundError(
+        "Semgrep executable not found on PATH.\n"
+        "Install it with: pip install semgrep\n"
+        "Then ensure 'semgrep' is accessible in your PATH and restart your terminal."
+    )
+
 
 RULESETS: list[str] = ["p/php", "p/owasp-top-ten"]
+
+# Project root is one level above pipeline/ (i.e. the repo root).
+_PROJECT_ROOT: Path = Path(__file__).parent.parent
+_LOCAL_RULES_DIR: Path = _PROJECT_ROOT / "rules"
+
+# ---------------------------------------------------------------------------
+# Local Ruleset Setup (for reproducible scans)
+# ---------------------------------------------------------------------------
+# By default, Semgrep downloads p/php and p/owasp-top-ten from the online
+# registry at runtime, so results can differ if Semgrep updates those rulesets.
+#
+# To pin rulesets locally:
+#
+#   mkdir rules
+#
+#   # Unix / macOS / Git Bash:
+#   semgrep --config p/php --dump-rules > rules/php.yaml
+#   semgrep --config p/owasp-top-ten --dump-rules > rules/owasp-top-ten.yaml
+#
+#   # Windows PowerShell:
+#   semgrep --config p/php --dump-rules | Out-File -Encoding utf8 rules/php.yaml
+#   semgrep --config p/owasp-top-ten --dump-rules | Out-File -Encoding utf8 rules/owasp-top-ten.yaml
+#
+# Once rules/ is populated, the scanner auto-detects it and uses the local files
+# instead of the online registry -- no code changes needed.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_rulesets() -> tuple[list[str], bool]:
+    """
+    Return (configs, is_local).
+
+    Checks for a non-empty rules/ directory at the project root.
+    If found, returns a single --config pointing to that directory so Semgrep
+    uses all YAML files inside it (pinned, reproducible).
+    Otherwise falls back to the online registry rulesets (RULESETS constant).
+    """
+    if _LOCAL_RULES_DIR.is_dir() and any(_LOCAL_RULES_DIR.iterdir()):
+        return [str(_LOCAL_RULES_DIR)], True
+    return list(RULESETS), False
+
 
 # Vulnerability classification: maps keyword patterns (substring of rule_id or
 # message, lower-cased) -> (vuln_type_label, iso_controls, priority)
@@ -35,7 +85,8 @@ RULESETS: list[str] = ["p/php", "p/owasp-top-ten"]
 _VULN_RULES: list[tuple[tuple[str, ...], str, list[str], int]] = [
     (
         ("sql-injection", "sqli", "mysql_query", "mysql_connect", "mysql_real_escape",
-         "sql_injection", "unsanitized-input-into-sql", "injection.php"),
+         "sql_injection", "unsanitized-input-into-sql", "injection.php",
+         "manually-constructed sql", "user data flows into", "sql string"),
         "SQL Injection",
         ["A.8.28", "A.8.26"],
         1,
@@ -60,6 +111,14 @@ _VULN_RULES: list[tuple[tuple[str, ...], str, list[str], int]] = [
         "Hardcoded Credentials",
         ["A.5.17", "A.8.28"],
         4,
+    ),
+    (
+        ("ssrf", "server-side-request-forgery", "server_side_request",
+         "file name based on user input", "user-controlled-filename",
+         "user input risks server-side"),
+        "SSRF",
+        ["A.8.28", "A.8.29"],
+        5,
     ),
     (
         ("path-traversal", "directory-traversal", "file-inclusion", "lfi", "rfi",
@@ -166,12 +225,16 @@ class SemgrepScanner:
 
     def __init__(
         self,
-        semgrep_exe: Path = SEMGREP_EXE,
+        semgrep_exe: Path | None = None,
         rulesets: list[str] | None = None,
         timeout_sec: int = 300,
     ) -> None:
-        self._exe = semgrep_exe
-        self._rulesets = rulesets if rulesets is not None else list(RULESETS)
+        self._exe = semgrep_exe if semgrep_exe is not None else _find_semgrep_exe()
+        if rulesets is not None:
+            self._rulesets = rulesets
+            self._using_local_rules = True
+        else:
+            self._rulesets, self._using_local_rules = _resolve_rulesets()
         self._timeout = timeout_sec
 
     # ------------------------------------------------------------------
@@ -202,14 +265,25 @@ class SemgrepScanner:
         if not target_path.exists():
             raise FileNotFoundError(f"Scan target does not exist: {target_path}")
 
+        rules_label = "local (pinned)" if self._using_local_rules else "online registry"
         console.print(
             Panel(
                 f"[bold cyan]Semgrep Security Scan[/bold cyan]\n"
                 f"Target : [green]{target_path}[/green]\n"
-                f"Rules  : [yellow]{', '.join(self._rulesets)}[/yellow]",
+                f"Rules  : [yellow]{', '.join(self._rulesets)}[/yellow]  "
+                f"[dim]({rules_label})[/dim]",
                 border_style="cyan",
             )
         )
+        if not self._using_local_rules:
+            console.print(
+                "[yellow]WARNING:[/yellow] Semgrep rulesets loaded from online registry "
+                "(p/php, p/owasp-top-ten). Scan results may differ between runs if "
+                "Semgrep updates those rulesets.\n"
+                "[dim]For reproducible scans: create rules/ and run "
+                "'semgrep --config p/php --dump-rules > rules/php.yaml' "
+                "(see pipeline/scanner.py for full instructions).[/dim]"
+            )
 
         cmd = self._build_command(target_path)
         raw = self._invoke_semgrep(cmd)
@@ -235,6 +309,7 @@ class SemgrepScanner:
             "--timeout", "60",         # per-file timeout (seconds)
             "--max-memory", "2048",    # MB; safe for 16 GB RAM system
             "--metrics=off",           # no telemetry
+            "--include", "*.php",      # scan only PHP files (skip JS, Vue, etc.)
             str(target_path),
         ]
         return cmd
@@ -473,7 +548,7 @@ class SemgrepScanner:
 
 def run_scan(
     target_path: Path,
-    semgrep_exe: Path = SEMGREP_EXE,
+    semgrep_exe: Path | None = None,
     rulesets: list[str] | None = None,
 ) -> ScanResult:
     """

@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+/output/
 /reports/
 /tmpclaude-0aa7-cwd
 /tmpclaude-0d6c-cwd

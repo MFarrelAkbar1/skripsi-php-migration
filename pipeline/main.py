@@ -42,14 +42,34 @@ try:
     from pipeline.scanner import ScanResult, run_scan
     from pipeline.converter import ConversionResult, run_conversion
     from pipeline.analyzer import AnalysisResult, run_analysis
-    from pipeline.ai_engine import AIRecommendation, run_ai_analysis
+    from pipeline.ai_engine import (
+        AIRecommendation,
+        COMPARISON_MODELS,
+        OLLAMA_MODEL,
+        run_ai_analysis,
+        run_llm_comparison,
+    )
     from pipeline.iso_mapper import ISOReport, run_iso_mapping
+    from pipeline.llm_quality_checker import (
+        generate_quality_chart,
+        run_llm_quality_check,
+    )
 except ModuleNotFoundError:
     from scanner import ScanResult, run_scan                    # type: ignore[no-redef]
     from converter import ConversionResult, run_conversion      # type: ignore[no-redef]
     from analyzer import AnalysisResult, run_analysis          # type: ignore[no-redef]
-    from ai_engine import AIRecommendation, run_ai_analysis    # type: ignore[no-redef]
+    from ai_engine import (                                     # type: ignore[no-redef]
+        AIRecommendation,
+        COMPARISON_MODELS,
+        OLLAMA_MODEL,
+        run_ai_analysis,
+        run_llm_comparison,
+    )
     from iso_mapper import ISOReport, run_iso_mapping          # type: ignore[no-redef]
+    from llm_quality_checker import (                          # type: ignore[no-redef]
+        generate_quality_chart,
+        run_llm_quality_check,
+    )
 
 console = Console()
 
@@ -143,6 +163,43 @@ def _parse_args() -> argparse.Namespace:
         help="Skip the Ollama AI-analysis step (useful when Ollama is not running).",
     )
     parser.add_argument(
+        "--model",
+        dest="model",
+        default="deepseek-coder:6.7b",
+        metavar="MODEL",
+        help=(
+            "Ollama model identifier for the single-model AI analysis step. "
+            "E.g.: deepseek-coder:6.7b, qwen2.5-coder:7b, codellama:7b. "
+            "Ignored when --compare-all is used."
+        ),
+    )
+    parser.add_argument(
+        "--compare-all",
+        dest="compare_all",
+        action="store_true",
+        default=False,
+        help=(
+            "Run zero-shot comparison across all 5 LLMs "
+            "(deepseek-coder:6.7b, qwen2.5-coder:7b, codellama:7b, "
+            "mistral:7b, llama3.1:8b). "
+            "Each finding is run 3x per model. "
+            "Results saved to reports/llm_comparison_<timestamp>.json. "
+            "Overrides --model."
+        ),
+    )
+    parser.add_argument(
+        "--quality-check",
+        dest="quality_check",
+        action="store_true",
+        default=False,
+        help=(
+            "Jalankan LLM quality check: ekstrak blok PHP dari output semua 5 model, "
+            "cek sintaks via php -l, hitung syntax_validity_rate per model. "
+            "Simpan ke reports/llm_quality_<timestamp>.json dan generate bar chart. "
+            "Bisa dikombinasikan dengan --compare-all."
+        ),
+    )
+    parser.add_argument(
         "--target-php",
         dest="target_php",
         choices=["7.4", "8.0", "8.1", "8.2", "8.3"],
@@ -181,6 +238,9 @@ def run_pipeline(
     skip_ai: bool = False,
     php_version_hint: str = "auto",
     target_version: str = "8.3",
+    model: str = "deepseek-coder:6.7b",
+    compare_all: bool = False,
+    quality_check: bool = False,
 ) -> PipelineResult:
     """
     Execute all six pipeline stages in order and return a ``PipelineResult``.
@@ -205,6 +265,19 @@ def run_pipeline(
     target_version:
         Target PHP version string passed to Rector (level-set chain) and
         PHPStan (``--php-version``).  Defaults to ``"8.3"``.
+    model:
+        Ollama model identifier for single-model AI analysis.
+        Only used when ``compare_all`` is ``False`` and ``skip_ai`` is ``False``.
+    compare_all:
+        When ``True``, runs zero-shot LLM comparison across all 5 thesis
+        models (``COMPARISON_MODELS``) with 3 runs per finding each, and saves
+        a ``reports/llm_comparison_<timestamp>.json``.  Overrides ``model``.
+    quality_check:
+        When ``True``, runs LLM quality check across all 5 models: extracts
+        PHP code blocks from each response, runs ``php -l``, and records
+        syntax validity per model.  Saves
+        ``reports/llm_quality_<timestamp>.json`` and a bar chart PNG.
+        Can be combined with ``compare_all``.
 
     Returns
     -------
@@ -305,23 +378,76 @@ def run_pipeline(
                 border_style="dim",
             )
         )
+    elif compare_all:
+        models_str = ", ".join(COMPARISON_MODELS)
+        console.print(
+            Panel(
+                "[bold magenta]Step 5 / 6 -- LLM Zero-Shot Comparison "
+                "(5 models x 3 runs each)[/bold magenta]\n"
+                f"[dim]Models : {models_str}[/dim]\n"
+                "[dim]Temperature : 0.1 (locked) | Prompt : identical for all models[/dim]",
+                border_style="magenta",
+            )
+        )
+        if pre_scan and pre_scan.findings:
+            try:
+                run_llm_comparison(
+                    findings=pre_scan.findings,
+                    reports_dir=reports_dir,
+                )
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[bold red]LLM comparison failed:[/bold red] {exc}")
+        else:
+            console.print(
+                "[dim]No pre-scan findings -- LLM comparison skipped.[/dim]"
+            )
     else:
         console.print(
             Panel(
-                "[bold magenta]Step 5 / 6 -- AI-Assisted Security Review (Ollama / Stable Code 3B)[/bold magenta]\n"
+                f"[bold magenta]Step 5 / 6 -- AI-Assisted Security Review "
+                f"({model})[/bold magenta]\n"
                 "[dim]Processing pre-scan findings with priority <= 3[/dim]",
                 border_style="magenta",
             )
         )
         if pre_scan and pre_scan.findings:
             try:
-                ai_recs = run_ai_analysis(pre_scan.findings)
+                ai_recs = run_ai_analysis(pre_scan.findings, model=model)
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[bold red]AI analysis failed:[/bold red] {exc}")
         else:
             console.print(
                 "[dim]No pre-scan findings -- AI review step skipped.[/dim]"
             )
+
+    # ------------------------------------------------------------------ #
+    # Step 5b -- LLM QUALITY CHECK  (optioneel, --quality-check flag)      #
+    # ------------------------------------------------------------------ #
+    if quality_check and not skip_ai:
+        console.print(
+            Panel(
+                "[bold magenta]Step 5b -- LLM Quality Check (Syntax Validity)[/bold magenta]\n"
+                "[dim]Ekstrak blok PHP dari output semua 5 model, jalankan php -l per blok[/dim]",
+                border_style="magenta",
+            )
+        )
+        if pre_scan and pre_scan.findings:
+            try:
+                quality_report = run_llm_quality_check(
+                    findings=pre_scan.findings,
+                    reports_dir=reports_dir,
+                )
+                generate_quality_chart(quality_report, reports_dir)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[bold red]LLM quality check failed:[/bold red] {exc}")
+        else:
+            console.print(
+                "[dim]No pre-scan findings -- LLM quality check skipped.[/dim]"
+            )
+    elif quality_check and skip_ai:
+        console.print(
+            "[dim]--quality-check ignored because --skip-ai is set.[/dim]"
+        )
 
     # ------------------------------------------------------------------ #
     # Step 6 -- ISO MAP                                                     #
@@ -587,15 +713,24 @@ def main() -> None:
     """Parse CLI arguments and run the full migration pipeline."""
     args = _parse_args()
 
+    ai_mode = (
+        "compare-all (5 models x 3 runs)"
+        if args.compare_all
+        else "skip"
+        if args.skip_ai
+        else args.model
+    )
+    quality_str = "[green]yes[/green]" if args.quality_check else "[dim]no[/dim]"
     console.print(
         Panel(
             f"[bold green]PHP Legacy Migration Pipeline[/bold green]\n"
-            f"Input      : [cyan]{args.input_dir.resolve()}[/cyan]\n"
-            f"Output     : [cyan]{args.output_dir.resolve()}[/cyan]\n"
-            f"Reports    : [cyan]{args.reports_dir.resolve()}[/cyan]\n"
-            f"Skip AI    : [yellow]{'Yes' if args.skip_ai else 'No'}[/yellow]\n"
-            f"PHP hint   : [yellow]{args.php_version}[/yellow]\n"
-            f"Target PHP : [bold yellow]{args.target_php}[/bold yellow]",
+            f"Input         : [cyan]{args.input_dir.resolve()}[/cyan]\n"
+            f"Output        : [cyan]{args.output_dir.resolve()}[/cyan]\n"
+            f"Reports       : [cyan]{args.reports_dir.resolve()}[/cyan]\n"
+            f"AI mode       : [yellow]{ai_mode}[/yellow]\n"
+            f"Quality check : {quality_str}\n"
+            f"PHP hint      : [yellow]{args.php_version}[/yellow]\n"
+            f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]",
             title="[bold]Skripsi -- Muhammad Farrel Akbar[/bold]",
             border_style="green",
         )
@@ -608,6 +743,9 @@ def main() -> None:
         skip_ai=args.skip_ai,
         php_version_hint=args.php_version,
         target_version=args.target_php,
+        model=args.model,
+        compare_all=args.compare_all,
+        quality_check=args.quality_check,
     )
 
     sys.exit(0 if result.is_compliant else 1)
