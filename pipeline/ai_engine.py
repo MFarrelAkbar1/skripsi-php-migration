@@ -474,6 +474,30 @@ class PHPAIEngine:
             {"role": "user", "content": user_content},
         ]
 
+    def _build_optimized_chat_messages(
+        self,
+        code: str,
+        vuln_type: str,
+        context: str,
+        iso_controls: list[str],
+        model: str,
+    ) -> list[dict[str, str]]:
+        """
+        Build model-specific system + user messages for Condition B experiments.
+
+        Placeholder: currently returns the same prompt as
+        ``_build_chat_messages()``.  Replace the body of this method per model
+        when the optimized prompts are ready -- Condition A is untouched.
+
+        Parameters
+        ----------
+        model:
+            Ollama model identifier (e.g. ``"qwen2.5-coder:7b"``).  Used to
+            select the per-model optimized prompt once the bodies are filled in.
+        """
+        # TODO: replace with per-model optimized prompts (Condition B)
+        return self._build_chat_messages(code, vuln_type, context, iso_controls)
+
     # ------------------------------------------------------------------
     # Ollama HTTP calls
     # ------------------------------------------------------------------
@@ -993,14 +1017,23 @@ def run_llm_comparison(
     runs_per_finding: int = COMPARISON_RUNS,
     ollama_base_url: str = OLLAMA_BASE_URL,
     reports_dir: Path | None = None,
+    prompt_mode: str = "standard",
+    save_raw_responses: bool = False,
 ) -> dict:
     """
-    Zero-shot comparison of multiple LLMs on the same Semgrep findings.
+    Comparison of multiple LLMs on the same Semgrep findings.
+
+    Condition A (``prompt_mode="standard"``): identical prompts for every
+    model -- the original zero-shot constraint.
+
+    Condition B (``prompt_mode="optimized"``): each model receives a
+    model-specific prompt built by ``_build_optimized_chat_messages()``.
+    The optimized prompt bodies are placeholders until filled in.
 
     Each eligible finding (priority <= PRIORITY_THRESHOLD) is sent to every
-    model ``runs_per_finding`` times using *identical* prompts and temperature
-    0.1.  Metrics captured per run: confidence score, inference time (seconds),
-    and whether the response contained a valid ``CONFIDENCE: N`` line.
+    model ``runs_per_finding`` times at temperature 0.1.  Metrics captured
+    per run: confidence score, inference time (seconds), and whether the
+    response contained a valid ``CONFIDENCE: N`` line.
 
     Parameters
     ----------
@@ -1018,6 +1051,16 @@ def run_llm_comparison(
     reports_dir:
         When provided, the report is written to
         ``reports_dir/llm_comparison_<timestamp>.json``.
+    prompt_mode:
+        ``"standard"`` -- Condition A, identical prompts across all models
+        (default, unchanged behaviour).
+        ``"optimized"`` -- Condition B, per-model optimised prompts built by
+        ``PHPAIEngine._build_optimized_chat_messages()``.
+    save_raw_responses:
+        When ``True``, each run dict includes a ``"raw_response"`` key with
+        the full model output text.  Off by default to keep reports compact.
+        Enable for case study runs where the actual model text is needed
+        (e.g. Bab 4 documentation, qualitative analysis).
 
     Returns
     -------
@@ -1025,7 +1068,7 @@ def run_llm_comparison(
         JSON-serializable comparison report.  Top-level keys:
         ``generated_at``, ``timestamp``, ``models_compared``,
         ``runs_per_finding``, ``temperature``, ``prompt_strategy``,
-        ``findings_count``, ``results``.
+        ``prompt_mode``, ``findings_count``, ``results``.
     """
     if models is None:
         models = COMPARISON_MODELS
@@ -1046,38 +1089,39 @@ def run_llm_comparison(
         return empty
 
     # Use a throw-away engine only for prompt building (model name does not
-    # affect prompt content -- all methods are effectively static).
+    # affect prompt content for standard mode -- all methods are effectively static).
     _builder = PHPAIEngine(ollama_base_url=ollama_base_url)
 
-    # Build chat messages once per finding -- content IDENTICAL across all models.
-    # Using /api/chat lets Ollama apply each model's native chat template
-    # (ChatML for Qwen2.5-Coder, Llama-3 instruct for llama3.1:8b, Mistral
-    # instruct for mistral:7b) without changing the prompt content.
-    # This is the core zero-shot constraint: same system+user text, different model.
+    # Condition A (standard): build chat messages once -- IDENTICAL across all models.
+    # Condition B (optimized): prompts are built per model inside the model loop below.
     chat_prompts: list[tuple[ScanFinding, list[dict[str, str]]]] = []
-    for finding in eligible:
-        truncated = finding.code_snippet[:MAX_CODE_CHARS]
-        context_str = (
-            f"File: {finding.file_path}, "
-            f"line {finding.line_start}. "
-            f"Semgrep rule: {finding.rule_id}. "
-            f"Finding: {finding.message}"
-        )
-        messages = _builder._build_chat_messages(
-            truncated, finding.vuln_type, context_str, finding.iso_controls
-        )
-        chat_prompts.append((finding, messages))
+    if prompt_mode == "standard":
+        for finding in eligible:
+            truncated = finding.code_snippet[:MAX_CODE_CHARS]
+            context_str = (
+                f"File: {finding.file_path}, "
+                f"line {finding.line_start}. "
+                f"Semgrep rule: {finding.rule_id}. "
+                f"Finding: {finding.message}"
+            )
+            messages = _builder._build_chat_messages(
+                truncated, finding.vuln_type, context_str, finding.iso_controls
+            )
+            chat_prompts.append((finding, messages))
 
     now = datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
 
+    _strategy = "zero-shot-chat" if prompt_mode == "standard" else "optimized-per-model"
     report: dict = {
         "generated_at": now.isoformat(),
         "timestamp": timestamp,
         "models_compared": list(models),
         "runs_per_finding": runs_per_finding,
         "temperature": _OLLAMA_OPTIONS["temperature"],
-        "prompt_strategy": "zero-shot-chat",
+        "prompt_strategy": _strategy,
+        "prompt_mode": prompt_mode,
+        "save_raw_responses": save_raw_responses,
         "findings_count": len(eligible),
         "results": {},
     }
@@ -1087,6 +1131,23 @@ def run_llm_comparison(
             f"\n[bold cyan]Model {model_idx}/{len(models)}:[/bold cyan] {model_name}"
         )
         engine = PHPAIEngine(model=model_name, ollama_base_url=ollama_base_url)
+
+        # Condition B: build per-model optimized prompts for this iteration.
+        if prompt_mode == "optimized":
+            chat_prompts = []
+            for finding in eligible:
+                truncated = finding.code_snippet[:MAX_CODE_CHARS]
+                context_str = (
+                    f"File: {finding.file_path}, "
+                    f"line {finding.line_start}. "
+                    f"Semgrep rule: {finding.rule_id}. "
+                    f"Finding: {finding.message}"
+                )
+                messages = _builder._build_optimized_chat_messages(
+                    truncated, finding.vuln_type, context_str,
+                    finding.iso_controls, model_name,
+                )
+                chat_prompts.append((finding, messages))
 
         if not engine._check_ollama_alive():
             console.print(
@@ -1137,12 +1198,15 @@ def run_llm_comparison(
                         format_valid_count += 1
                     confidences.append(conf)
                     times.append(elapsed)
-                    runs_data.append({
+                    run_entry: dict = {
                         "run_index": run_i,
                         "confidence": conf,
                         "inference_time_sec": elapsed,
                         "format_valid": fmt_valid,
-                    })
+                    }
+                    if save_raw_responses:
+                        run_entry["raw_response"] = raw_text
+                    runs_data.append(run_entry)
                     progress.advance(task)
 
                 conf_mean = round(statistics.mean(confidences), 4)

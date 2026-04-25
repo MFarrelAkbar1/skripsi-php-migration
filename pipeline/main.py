@@ -223,6 +223,31 @@ def _parse_args() -> argparse.Namespace:
             "(overrides per-file auto-detection)."
         ),
     )
+    parser.add_argument(
+        "--prompt-mode",
+        dest="prompt_mode",
+        choices=["standard", "optimized"],
+        default="standard",
+        help=(
+            "Prompt strategy for --compare-all (LLM comparison experiment). "
+            "'standard' = Condition A: identical prompt for every model (default, unchanged). "
+            "'optimized' = Condition B: per-model optimized prompt via "
+            "PHPAIEngine._build_optimized_chat_messages(). "
+            "Ignored when --compare-all is not set."
+        ),
+    )
+    parser.add_argument(
+        "--save-raw-responses",
+        dest="save_raw_responses",
+        action="store_true",
+        default=False,
+        help=(
+            "Save full raw model response text in the llm_comparison JSON report. "
+            "Off by default (keeps reports compact). "
+            "Enable for qualitative analysis or Bab 4 case study documentation. "
+            "Only applies when --compare-all is set."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -241,6 +266,8 @@ def run_pipeline(
     model: str = "deepseek-coder:6.7b",
     compare_all: bool = False,
     quality_check: bool = False,
+    prompt_mode: str = "standard",
+    save_raw_responses: bool = False,
 ) -> PipelineResult:
     """
     Execute all six pipeline stages in order and return a ``PipelineResult``.
@@ -269,9 +296,13 @@ def run_pipeline(
         Ollama model identifier for single-model AI analysis.
         Only used when ``compare_all`` is ``False`` and ``skip_ai`` is ``False``.
     compare_all:
-        When ``True``, runs zero-shot LLM comparison across all 5 thesis
-        models (``COMPARISON_MODELS``) with 3 runs per finding each, and saves
-        a ``reports/llm_comparison_<timestamp>.json``.  Overrides ``model``.
+        When ``True``, runs LLM comparison across all 5 thesis models
+        (``COMPARISON_MODELS``) with 3 runs per finding each, and saves a
+        ``reports/llm_comparison_<timestamp>.json``.  Overrides ``model``.
+    prompt_mode:
+        ``"standard"`` (Condition A) or ``"optimized"`` (Condition B).
+        Only used when ``compare_all`` is ``True``.  Defaults to
+        ``"standard"`` (original unchanged behaviour).
     quality_check:
         When ``True``, runs LLM quality check across all 5 models: extracts
         PHP code blocks from each response, runs ``php -l``, and records
@@ -380,12 +411,17 @@ def run_pipeline(
         )
     elif compare_all:
         models_str = ", ".join(COMPARISON_MODELS)
+        _prompt_label = (
+            "identical for all models (Condition A)"
+            if prompt_mode == "standard"
+            else "per-model optimized (Condition B)"
+        )
         console.print(
             Panel(
-                "[bold magenta]Step 5 / 6 -- LLM Zero-Shot Comparison "
+                "[bold magenta]Step 5 / 6 -- LLM Comparison "
                 "(5 models x 3 runs each)[/bold magenta]\n"
                 f"[dim]Models : {models_str}[/dim]\n"
-                "[dim]Temperature : 0.1 (locked) | Prompt : identical for all models[/dim]",
+                f"[dim]Temperature : 0.1 (locked) | Prompt : {_prompt_label}[/dim]",
                 border_style="magenta",
             )
         )
@@ -394,6 +430,8 @@ def run_pipeline(
                 run_llm_comparison(
                     findings=pre_scan.findings,
                     reports_dir=reports_dir,
+                    prompt_mode=prompt_mode,
+                    save_raw_responses=save_raw_responses,
                 )
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[bold red]LLM comparison failed:[/bold red] {exc}")
@@ -721,6 +759,11 @@ def main() -> None:
         else args.model
     )
     quality_str = "[green]yes[/green]" if args.quality_check else "[dim]no[/dim]"
+    prompt_mode_str = (
+        "[dim]standard (Condition A)[/dim]"
+        if args.prompt_mode == "standard"
+        else "[bold yellow]optimized (Condition B)[/bold yellow]"
+    )
     console.print(
         Panel(
             f"[bold green]PHP Legacy Migration Pipeline[/bold green]\n"
@@ -728,6 +771,7 @@ def main() -> None:
             f"Output        : [cyan]{args.output_dir.resolve()}[/cyan]\n"
             f"Reports       : [cyan]{args.reports_dir.resolve()}[/cyan]\n"
             f"AI mode       : [yellow]{ai_mode}[/yellow]\n"
+            f"Prompt mode   : {prompt_mode_str}\n"
             f"Quality check : {quality_str}\n"
             f"PHP hint      : [yellow]{args.php_version}[/yellow]\n"
             f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]",
@@ -746,6 +790,8 @@ def main() -> None:
         model=args.model,
         compare_all=args.compare_all,
         quality_check=args.quality_check,
+        prompt_mode=args.prompt_mode,
+        save_raw_responses=args.save_raw_responses,
     )
 
     sys.exit(0 if result.is_compliant else 1)
