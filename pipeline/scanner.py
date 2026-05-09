@@ -228,6 +228,7 @@ class SemgrepScanner:
         semgrep_exe: Path | None = None,
         rulesets: list[str] | None = None,
         timeout_sec: int = 300,
+        exclude_dirs: list[str] | None = None,
     ) -> None:
         self._exe = semgrep_exe if semgrep_exe is not None else _find_semgrep_exe()
         if rulesets is not None:
@@ -236,6 +237,7 @@ class SemgrepScanner:
         else:
             self._rulesets, self._using_local_rules = _resolve_rulesets()
         self._timeout = timeout_sec
+        self._exclude_dirs: list[str] = exclude_dirs or []
 
     # ------------------------------------------------------------------
     # Public API
@@ -305,13 +307,15 @@ class SemgrepScanner:
             cmd += ["--config", ruleset]
         cmd += [
             "--json",
-            "--no-git-ignore",         # scan all files regardless of .gitignore
-            "--timeout", "60",         # per-file timeout (seconds)
-            "--max-memory", "2048",    # MB; safe for 16 GB RAM system
-            "--metrics=off",           # no telemetry
-            "--include", "*.php",      # scan only PHP files (skip JS, Vue, etc.)
-            str(target_path),
+            "--no-git-ignore",
+            "--timeout", "60",
+            "--max-memory", "2048",
+            "--metrics=off",
+            "--include", "*.php",
         ]
+        for dirname in self._exclude_dirs:
+            cmd += ["--exclude", dirname]
+        cmd.append(str(target_path))
         return cmd
 
     # ------------------------------------------------------------------
@@ -550,6 +554,7 @@ def run_scan(
     target_path: Path,
     semgrep_exe: Path | None = None,
     rulesets: list[str] | None = None,
+    exclude_dirs: list[str] | None = None,
 ) -> ScanResult:
     """
     Run a Semgrep security scan and return structured results.
@@ -569,5 +574,7 @@ def run_scan(
     ScanResult
         Structured findings with ISO 27001 control mappings.
     """
-    scanner = SemgrepScanner(semgrep_exe=semgrep_exe, rulesets=rulesets)
+    scanner = SemgrepScanner(
+        semgrep_exe=semgrep_exe, rulesets=rulesets, exclude_dirs=exclude_dirs
+    )
     return scanner.run(target_path)

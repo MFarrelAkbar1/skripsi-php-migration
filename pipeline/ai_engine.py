@@ -175,10 +175,12 @@ class PHPAIEngine:
         model: str = OLLAMA_MODEL,
         ollama_base_url: str = OLLAMA_BASE_URL,
         timeout_sec: int = 120,
+        temperature: float = _OLLAMA_OPTIONS["temperature"],
     ) -> None:
         self._model = model
         self._base_url = ollama_base_url.rstrip("/")
         self._timeout = timeout_sec
+        self._temperature = temperature
         self._generate_url = f"{self._base_url}/api/generate"
         self._chat_url = f"{self._base_url}/api/chat"
 
@@ -485,18 +487,214 @@ class PHPAIEngine:
         """
         Build model-specific system + user messages for Condition B experiments.
 
-        Placeholder: currently returns the same prompt as
-        ``_build_chat_messages()``.  Replace the body of this method per model
-        when the optimized prompts are ready -- Condition A is untouched.
+        Each model receives a prompt tailored to address its observed weaknesses
+        from Condition A.  Condition A (``_build_chat_messages``) is unchanged.
+
+        Per-model strategies (based on Condition A results)
+        ----------------------------------------------------
+        qwen2.5-coder:7b    -- format compliance 0%, syntax validity 100%, extraction 97%.
+                               Relaxed format: no strict CONFIDENCE demand; focus on code
+                               quality with a soft confidence suggestion.
+        deepseek-coder:6.7b -- format compliance 15%, extraction 9%.
+                               Short, direct instructions with no layered complexity.
+        mistral:7b          -- format compliance 6%, extraction 3%.
+                               One concrete few-shot example demonstrating expected output.
+        llama3.1:8b         -- format compliance 0%, extraction 3%.
+                               Strong explicit role-play + numbered step instructions.
+        codellama:7b        -- format compliance 100%, syntax validity 27.3% (72.7% errors).
+                               Same format as Condition A plus an explicit php -l validity
+                               instruction in both system and user messages.
+
+        Falls back to ``_build_chat_messages()`` for unrecognised model names.
 
         Parameters
         ----------
         model:
-            Ollama model identifier (e.g. ``"qwen2.5-coder:7b"``).  Used to
-            select the per-model optimized prompt once the bodies are filled in.
+            Ollama model identifier (e.g. ``"qwen2.5-coder:7b"``).
         """
-        # TODO: replace with per-model optimized prompts (Condition B)
-        return self._build_chat_messages(code, vuln_type, context, iso_controls)
+        controls_str = ", ".join(iso_controls)
+        context_block = f"Context: {context}\n" if context else ""
+
+        # ------------------------------------------------------------------
+        # qwen2.5-coder:7b -- relaxed format, focus on code quality
+        # Condition A weakness: format compliance 0% despite syntax validity 100%.
+        # Strategy: remove rigid CONFIDENCE demand; ask for it softly so the model
+        # is not distracted from producing high-quality PHP code.
+        # ------------------------------------------------------------------
+        if model == "qwen2.5-coder:7b":
+            system_content = (
+                "You are a PHP security expert specializing in PHP 7.x to PHP 8.x migration. "
+                "Your primary goal is to produce clean, secure, and syntactically correct "
+                "PHP 8.x code. "
+                "Apply ISO/IEC 27001:2022 secure coding principles (A.8.28, A.8.29)."
+            )
+            user_content = (
+                f"Analyze this PHP code for a [{vuln_type}] vulnerability "
+                f"and provide a secure fix.\n"
+                f"ISO/IEC 27001:2022 Controls: {controls_str}\n"
+                f"{context_block}"
+                "\nVULNERABLE CODE:\n"
+                "```php\n"
+                f"{code}\n"
+                "```\n\n"
+                "Please:\n"
+                "1. Briefly explain the security issue.\n"
+                "2. Provide the corrected PHP 8.x code in a ```php code block.\n\n"
+                "If you wish, rate your confidence (0-100) at the end as: "
+                "CONFIDENCE: [number]\n"
+            )
+
+        # ------------------------------------------------------------------
+        # deepseek-coder:6.7b -- short and direct, no layered instructions
+        # Condition A weakness: format compliance 15%, extraction 9%.
+        # Strategy: strip all multi-level instructions down to one focused ask;
+        # single CONFIDENCE line at the very end is the only format requirement.
+        # ------------------------------------------------------------------
+        elif model == "deepseek-coder:6.7b":
+            system_content = (
+                "You are a PHP security expert. "
+                "Fix PHP vulnerabilities with secure PHP 8.x code. "
+                "ISO/IEC 27001:2022 A.8.28 applies."
+            )
+            user_content = (
+                f"Fix this [{vuln_type}] in PHP 8.x.\n"
+                f"ISO controls: {controls_str}\n"
+                f"{context_block}"
+                "\nCODE:\n"
+                "```php\n"
+                f"{code}\n"
+                "```\n\n"
+                "Write:\n"
+                "- Why it is vulnerable.\n"
+                "- Fixed PHP 8.x code in a ```php block.\n"
+                "- Last line: CONFIDENCE: [0-100]\n"
+            )
+
+        # ------------------------------------------------------------------
+        # mistral:7b -- one concrete few-shot example
+        # Condition A weakness: format compliance 6%, extraction 3%.
+        # Strategy: show a complete worked example (SQL injection) so the model
+        # learns the expected output structure by imitation rather than instruction.
+        # ------------------------------------------------------------------
+        elif model == "mistral:7b":
+            system_content = (
+                "You are a PHP security expert and migration specialist. "
+                "Analyze PHP vulnerabilities and provide secure PHP 8.x replacements. "
+                "Follow ISO/IEC 27001:2022 controls A.8.28 (Secure Coding) "
+                "and A.8.29 (Security Testing in Development)."
+            )
+            user_content = (
+                f"TASK: Fix a [{vuln_type}] vulnerability.\n"
+                f"ISO controls: {controls_str}\n"
+                f"{context_block}"
+                "\n=== EXAMPLE ===\n"
+                "VULNERABLE CODE:\n"
+                "```php\n"
+                "$id = $_GET['id'];\n"
+                "$result = mysql_query('SELECT * FROM users WHERE id=' . $id);\n"
+                "```\n\n"
+                "EXPECTED OUTPUT:\n"
+                "The code uses deprecated mysql_query() with direct user-input concatenation, "
+                "enabling SQL injection (ISO/IEC 27001:2022 A.8.28). "
+                "An attacker can manipulate the query to read or destroy data.\n\n"
+                "```php\n"
+                "$stmt = $pdo->prepare('SELECT * FROM users WHERE id = ?');\n"
+                "$stmt->execute([$_GET['id']]);\n"
+                "$result = $stmt->fetchAll();\n"
+                "```\n\n"
+                "CONFIDENCE: 90\n"
+                "=== END EXAMPLE ===\n\n"
+                "Now fix this code using the same format:\n"
+                "VULNERABLE CODE:\n"
+                "```php\n"
+                f"{code}\n"
+                "```\n\n"
+                "Provide: explanation, then ```php fix block, "
+                "then CONFIDENCE: [0-100].\n"
+            )
+
+        # ------------------------------------------------------------------
+        # llama3.1:8b -- explicit role-play + very clear numbered steps
+        # Condition A weakness: format compliance 0%, extraction 3%.
+        # Strategy: strong persona framing + decompose the task into four
+        # numbered steps so the model has a concrete procedural path to follow.
+        # ------------------------------------------------------------------
+        elif model == "llama3.1:8b":
+            system_content = (
+                "You are an expert PHP security auditor with 10 years of experience "
+                "in web application security and PHP migration. "
+                "Your role is to identify vulnerabilities and write secure PHP 8.x code. "
+                "You strictly follow ISO/IEC 27001:2022 Annex A controls for secure "
+                "software development. "
+                "You always respond in exactly the format requested, without deviation."
+            )
+            user_content = (
+                "Act as a PHP security expert and follow these steps exactly:\n\n"
+                f"Step 1: Read the vulnerable PHP code below.\n"
+                f"Step 2: Identify why it is a [{vuln_type}] security risk "
+                f"(ISO/IEC 27001:2022: {controls_str}).\n"
+                "Step 3: Write a secure PHP 8.x replacement that fully fixes "
+                "the vulnerability.\n"
+                "Step 4: End your response with this exact line: "
+                "CONFIDENCE: [number 0-100]\n"
+                f"{context_block}"
+                "\nVULNERABLE CODE:\n"
+                "```php\n"
+                f"{code}\n"
+                "```\n\n"
+                "Your response must follow this exact order:\n"
+                "1. Explanation of the vulnerability.\n"
+                "2. ```php code block with the fix.\n"
+                "3. CONFIDENCE: [number]\n"
+            )
+
+        # ------------------------------------------------------------------
+        # codellama:7b -- same format as Condition A + syntax validity guard
+        # Condition A weakness: format compliance 100% but syntax errors in 72.7%
+        # of generated code blocks (24/33 failed php -l).
+        # Strategy: keep identical format instructions; add an explicit php -l
+        # pre-flight check instruction in both system and user messages.
+        # ------------------------------------------------------------------
+        elif model == "codellama:7b":
+            system_content = (
+                "You are a PHP security expert and migration specialist. "
+                "You analyze PHP code for security vulnerabilities and provide "
+                "secure PHP 8.x replacements. "
+                "Follow ISO/IEC 27001:2022 secure coding standards (A.8.28, A.8.29). "
+                "CRITICAL: Every PHP code block you generate must be syntactically valid "
+                "and pass php -l (lint check). "
+                "Mentally verify your code compiles without errors before writing it. "
+                "Never output PHP with syntax errors."
+            )
+            user_content = (
+                f"TASK: Analyze the following PHP code for a [{vuln_type}] vulnerability "
+                f"and provide a secure PHP 8.x replacement.\n"
+                f"ISO/IEC 27001:2022 Controls: {controls_str}\n"
+                f"{context_block}"
+                "\nVULNERABLE CODE:\n"
+                "```php\n"
+                f"{code}\n"
+                "```\n\n"
+                "Respond in English:\n"
+                "1. Explain the vulnerability and its security risk.\n"
+                "2. Provide the corrected PHP 8.x code in a ```php code block.\n"
+                "   IMPORTANT: Before writing the code, verify it is syntactically\n"
+                "   correct (as if running php -l). No syntax errors are allowed.\n\n"
+                "After your explanation and code fix, write exactly this on the last line:\n"
+                "CONFIDENCE: [number between 0 and 100]\n\n"
+                "Example last line: CONFIDENCE: 85\n"
+            )
+
+        # ------------------------------------------------------------------
+        # Unknown model -- fall back to standard Condition A prompt
+        # ------------------------------------------------------------------
+        else:
+            return self._build_chat_messages(code, vuln_type, context, iso_controls)
+
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content},
+        ]
 
     # ------------------------------------------------------------------
     # Ollama HTTP calls
@@ -525,7 +723,7 @@ class PHPAIEngine:
             "model": self._model,
             "prompt": prompt,
             "stream": False,
-            "options": _OLLAMA_OPTIONS,
+            "options": {**_OLLAMA_OPTIONS, "temperature": self._temperature},
         }
 
         try:
@@ -592,7 +790,7 @@ class PHPAIEngine:
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "options": _OLLAMA_OPTIONS,
+            "options": {**_OLLAMA_OPTIONS, "temperature": self._temperature},
         }
 
         try:
@@ -1019,6 +1217,8 @@ def run_llm_comparison(
     reports_dir: Path | None = None,
     prompt_mode: str = "standard",
     save_raw_responses: bool = False,
+    temperature: float = _OLLAMA_OPTIONS["temperature"],
+    max_code_chars: int = MAX_CODE_CHARS,
 ) -> dict:
     """
     Comparison of multiple LLMs on the same Semgrep findings.
@@ -1081,7 +1281,8 @@ def run_llm_comparison(
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
             "models_compared": list(models),
             "runs_per_finding": runs_per_finding,
-            "temperature": _OLLAMA_OPTIONS["temperature"],
+            "temperature": temperature,
+            "context_window": max_code_chars,
             "prompt_strategy": "zero-shot-chat",
             "findings_count": 0,
             "results": {},
@@ -1097,7 +1298,7 @@ def run_llm_comparison(
     chat_prompts: list[tuple[ScanFinding, list[dict[str, str]]]] = []
     if prompt_mode == "standard":
         for finding in eligible:
-            truncated = finding.code_snippet[:MAX_CODE_CHARS]
+            truncated = finding.code_snippet[:max_code_chars]
             context_str = (
                 f"File: {finding.file_path}, "
                 f"line {finding.line_start}. "
@@ -1118,7 +1319,8 @@ def run_llm_comparison(
         "timestamp": timestamp,
         "models_compared": list(models),
         "runs_per_finding": runs_per_finding,
-        "temperature": _OLLAMA_OPTIONS["temperature"],
+        "temperature": temperature,
+        "context_window": max_code_chars,
         "prompt_strategy": _strategy,
         "prompt_mode": prompt_mode,
         "save_raw_responses": save_raw_responses,
@@ -1130,13 +1332,13 @@ def run_llm_comparison(
         console.print(
             f"\n[bold cyan]Model {model_idx}/{len(models)}:[/bold cyan] {model_name}"
         )
-        engine = PHPAIEngine(model=model_name, ollama_base_url=ollama_base_url)
+        engine = PHPAIEngine(model=model_name, ollama_base_url=ollama_base_url, temperature=temperature)
 
         # Condition B: build per-model optimized prompts for this iteration.
         if prompt_mode == "optimized":
             chat_prompts = []
             for finding in eligible:
-                truncated = finding.code_snippet[:MAX_CODE_CHARS]
+                truncated = finding.code_snippet[:max_code_chars]
                 context_str = (
                     f"File: {finding.file_path}, "
                     f"line {finding.line_start}. "

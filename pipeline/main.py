@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -54,6 +55,11 @@ try:
         generate_quality_chart,
         run_llm_quality_check,
     )
+    from pipeline.composer_analyzer import (
+        ComposerAnalysisResult,
+        composer_result_to_dict,
+        run_composer_analysis,
+    )
 except ModuleNotFoundError:
     from scanner import ScanResult, run_scan                    # type: ignore[no-redef]
     from converter import ConversionResult, run_conversion      # type: ignore[no-redef]
@@ -69,6 +75,11 @@ except ModuleNotFoundError:
     from llm_quality_checker import (                          # type: ignore[no-redef]
         generate_quality_chart,
         run_llm_quality_check,
+    )
+    from composer_analyzer import (                            # type: ignore[no-redef]
+        ComposerAnalysisResult,
+        composer_result_to_dict,
+        run_composer_analysis,
     )
 
 console = Console()
@@ -105,6 +116,7 @@ class PipelineResult:
     analysis: AnalysisResult | None
     ai_recommendations: list[AIRecommendation]
     iso_report: ISOReport | None
+    composer_analysis: ComposerAnalysisResult | None
     total_duration_sec: float
     started_at: datetime
 
@@ -202,13 +214,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-php",
         dest="target_php",
-        choices=["7.4", "8.0", "8.1", "8.2", "8.3"],
+        choices=["7.4", "8.0", "8.1", "8.2", "8.3", "8.5"],
         default="8.3",
         metavar="VERSION",
         help=(
             "Target PHP version for Rector migration and PHPStan validation. "
-            "Choices: 7.4, 8.0, 8.1, 8.2, 8.3  (default: 8.3). "
-            "Example: --target-php 8.1"
+            "Choices: 7.4, 8.0, 8.1, 8.2, 8.3, 8.5  (default: 8.3). "
+            "Example: --target-php 8.5"
         ),
     )
     parser.add_argument(
@@ -248,12 +260,99 @@ def _parse_args() -> argparse.Namespace:
             "Only applies when --compare-all is set."
         ),
     )
+    parser.add_argument(
+        "--temperature",
+        dest="temperature",
+        type=float,
+        default=0.1,
+        metavar="TEMP",
+        help=(
+            "Ollama sampling temperature for LLM inference. "
+            "Float between 0.0 (deterministic) and 1.0 (creative). "
+            "Default: 0.1. Only applies when --compare-all is set."
+        ),
+    )
+    parser.add_argument(
+        "--context-window",
+        dest="context_window",
+        type=int,
+        default=2000,
+        metavar="N",
+        help=(
+            "Maximum characters of PHP code sent per request (context-window budget). "
+            "Code snippets are truncated to this length before being sent to the model. "
+            "Default: 2000. Only applies when --compare-all is set."
+        ),
+    )
+    parser.add_argument(
+        "--models",
+        dest="models",
+        nargs="+",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Filter which models to run in --compare-all mode. "
+            "Accepts one or more model identifiers, space- or comma-separated. "
+            "Example: --models qwen2.5-coder:7b  or  --models qwen2.5-coder:7b,codellama:7b. "
+            "When omitted, all COMPARISON_MODELS are used."
+        ),
+    )
+    parser.add_argument(
+        "--exclude",
+        dest="exclude",
+        nargs="+",
+        default=[],
+        metavar="DIR",
+        help=(
+            "Directory names to exclude from conversion, scan, and analysis. "
+            "Matches any path component at any depth. "
+            "Example: --exclude third_party tcpdf  or  --exclude vendor. "
+            "Default: none (all directories included)."
+        ),
+    )
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
 # Pipeline orchestrator
 # ---------------------------------------------------------------------------
+
+
+def _maybe_clean_output_dir(output_dir: Path) -> None:
+    """
+    Bersihkan isi output_dir sebelum pipeline dijalankan.
+
+    Hanya berjalan jika direktori sudah ada dan tidak kosong.
+    Meminta konfirmasi user terlebih dahulu; pipeline dibatalkan jika ditolak.
+    """
+    if not output_dir.exists():
+        return
+    existing = list(output_dir.iterdir())
+    if not existing:
+        return
+
+    console.print(
+        Panel(
+            f"[yellow]Direktori output/ sudah berisi {len(existing)} item:[/yellow]\n"
+            + "\n".join(f"  - {p.name}" for p in existing[:10])
+            + ("\n  ..." if len(existing) > 10 else "")
+            + f"\n\n[bold]Hapus semua isi [cyan]{output_dir.resolve()}[/cyan] sebelum lanjut? [Y/n][/bold]",
+            title="[bold yellow]Konfirmasi Pembersihan Output[/bold yellow]",
+            border_style="yellow",
+        )
+    )
+    try:
+        answer = input().strip().lower()
+    except EOFError:
+        answer = "y"
+
+    if answer in ("", "y", "yes"):
+        shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]Output directory dibersihkan:[/green] {output_dir.resolve()}")
+    else:
+        console.print("[bold red]Pipeline dibatalkan oleh user.[/bold red]")
+        sys.exit(0)
 
 
 def run_pipeline(
@@ -268,6 +367,10 @@ def run_pipeline(
     quality_check: bool = False,
     prompt_mode: str = "standard",
     save_raw_responses: bool = False,
+    temperature: float = 0.1,
+    max_code_chars: int = 2000,
+    selected_models: list[str] | None = None,
+    exclude_dirs: list[str] | None = None,
 ) -> PipelineResult:
     """
     Execute all six pipeline stages in order and return a ``PipelineResult``.
@@ -331,7 +434,7 @@ def run_pipeline(
     )
     pre_scan: ScanResult | None = None
     try:
-        pre_scan = run_scan(input_dir)
+        pre_scan = run_scan(input_dir, exclude_dirs=exclude_dirs)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]Pre-scan failed:[/bold red] {exc}")
 
@@ -351,9 +454,29 @@ def run_pipeline(
             input_path=input_dir,
             output_path=output_dir,
             target_version=target_version,
+            exclude_dirs=exclude_dirs,
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]Conversion failed:[/bold red] {exc}")
+
+    # ------------------------------------------------------------------ #
+    # Step 2b -- COMPOSER ANALYSIS                                          #
+    # ------------------------------------------------------------------ #
+    console.print(
+        Panel(
+            "[bold green]Step 2b -- Composer Dependency Analysis[/bold green]\n"
+            f"[dim]Checking composer.json in {input_dir.resolve()} for PHP {target_version} compatibility[/dim]",
+            border_style="green",
+        )
+    )
+    composer_analysis: ComposerAnalysisResult | None = None
+    try:
+        composer_analysis = run_composer_analysis(
+            input_dir=input_dir,
+            target_php=target_version,
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[bold red]Composer analysis failed:[/bold red] {exc}")
 
     # ------------------------------------------------------------------ #
     # Step 3 -- POST-SCAN                                                   #
@@ -368,7 +491,7 @@ def run_pipeline(
     post_scan: ScanResult | None = None
     if conversion is not None:
         try:
-            post_scan = run_scan(output_dir)
+            post_scan = run_scan(output_dir, exclude_dirs=exclude_dirs)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[bold red]Post-scan failed:[/bold red] {exc}")
     else:
@@ -389,7 +512,11 @@ def run_pipeline(
     analysis: AnalysisResult | None = None
     if conversion is not None:
         try:
-            analysis = run_analysis(target_path=output_dir, php_version=target_version)
+            analysis = run_analysis(
+                target_path=output_dir,
+                php_version=target_version,
+                exclude_dirs=exclude_dirs,
+            )
         except Exception as exc:  # noqa: BLE001
             console.print(f"[bold red]Analysis failed:[/bold red] {exc}")
     else:
@@ -421,7 +548,7 @@ def run_pipeline(
                 "[bold magenta]Step 5 / 6 -- LLM Comparison "
                 "(5 models x 3 runs each)[/bold magenta]\n"
                 f"[dim]Models : {models_str}[/dim]\n"
-                f"[dim]Temperature : 0.1 (locked) | Prompt : {_prompt_label}[/dim]",
+                f"[dim]Temperature : {temperature} | Prompt : {_prompt_label}[/dim]",
                 border_style="magenta",
             )
         )
@@ -432,6 +559,9 @@ def run_pipeline(
                     reports_dir=reports_dir,
                     prompt_mode=prompt_mode,
                     save_raw_responses=save_raw_responses,
+                    temperature=temperature,
+                    max_code_chars=max_code_chars,
+                    models=selected_models,
                 )
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[bold red]LLM comparison failed:[/bold red] {exc}")
@@ -518,6 +648,7 @@ def run_pipeline(
         analysis=analysis,
         ai_recommendations=ai_recs,
         iso_report=iso_report,
+        composer_analysis=composer_analysis,
         total_duration_sec=round(total_duration, 2),
         started_at=started_at,
     )
@@ -633,12 +764,25 @@ def _print_final_summary(result: PipelineResult) -> None:
         else "[dim]0 / skipped[/dim]"
     )
 
+    def _composer_str() -> str:
+        ca = result.composer_analysis
+        if ca is None or not ca.composer_found:
+            return "[dim]composer.json not found[/dim]"
+        issues = ca.issues_count
+        total = len(ca.recommendations)
+        colour = "red" if issues else "green"
+        return (
+            f"[{colour}]{issues} issue(s)[/{colour}] in {total} dep(s)"
+            f"  [dim](PHP constraint: {ca.php_constraint or 'not set'})[/dim]"
+        )
+
     console.print(
         Panel(
             f"[bold]ISO 27001:2022 Status  :[/bold]  {iso_status_str}\n"
             f"[bold]Rector Conversion      :[/bold]  {_conv_str()}\n"
             f"[bold]PHPStan Errors         :[/bold]  {_phpstan_str()}\n"
             f"[bold]AI Recommendations     :[/bold]  {ai_str}\n"
+            f"[bold]Composer Dependencies  :[/bold]  {_composer_str()}\n"
             f"[bold]Total Duration         :[/bold]  {result.total_duration_sec}s\n"
             f"[bold]Started At             :[/bold]  "
             f"{result.started_at.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -683,6 +827,11 @@ def _save_pipeline_result(
                 "generated_at": result.iso_report.generated_at.isoformat(),
             }
             if result.iso_report
+            else None
+        ),
+        "composer_analysis": (
+            composer_result_to_dict(result.composer_analysis)
+            if result.composer_analysis is not None
             else None
         ),
     }
@@ -751,6 +900,13 @@ def main() -> None:
     """Parse CLI arguments and run the full migration pipeline."""
     args = _parse_args()
 
+    # Flatten --models values: support both space-separated and comma-separated
+    selected_models: list[str] | None = None
+    if args.models:
+        selected_models = []
+        for entry in args.models:
+            selected_models.extend(m.strip() for m in entry.split(",") if m.strip())
+
     ai_mode = (
         "compare-all (5 models x 3 runs)"
         if args.compare_all
@@ -764,6 +920,11 @@ def main() -> None:
         if args.prompt_mode == "standard"
         else "[bold yellow]optimized (Condition B)[/bold yellow]"
     )
+    models_str = (
+        ", ".join(selected_models)
+        if selected_models
+        else "[dim]all (default)[/dim]"
+    )
     console.print(
         Panel(
             f"[bold green]PHP Legacy Migration Pipeline[/bold green]\n"
@@ -774,11 +935,18 @@ def main() -> None:
             f"Prompt mode   : {prompt_mode_str}\n"
             f"Quality check : {quality_str}\n"
             f"PHP hint      : [yellow]{args.php_version}[/yellow]\n"
-            f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]",
+            f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]\n"
+            f"Temperature   : [yellow]{args.temperature}[/yellow]\n"
+            f"Context window: [yellow]{args.context_window}[/yellow] chars\n"
+            f"Models filter : [yellow]{models_str}[/yellow]\n"
+            f"Excluded dirs : [yellow]{', '.join(args.exclude) if args.exclude else 'none'}[/yellow]",
             title="[bold]Skripsi -- Muhammad Farrel Akbar[/bold]",
             border_style="green",
         )
     )
+
+    # Bersihkan output/ jika sudah ada isi dari run sebelumnya
+    _maybe_clean_output_dir(args.output_dir)
 
     result = run_pipeline(
         input_dir=args.input_dir,
@@ -792,6 +960,10 @@ def main() -> None:
         quality_check=args.quality_check,
         prompt_mode=args.prompt_mode,
         save_raw_responses=args.save_raw_responses,
+        temperature=args.temperature,
+        max_code_chars=args.context_window,
+        selected_models=selected_models,
+        exclude_dirs=args.exclude if args.exclude else None,
     )
 
     sys.exit(0 if result.is_compliant else 1)

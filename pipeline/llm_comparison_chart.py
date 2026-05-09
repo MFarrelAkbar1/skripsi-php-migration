@@ -264,17 +264,31 @@ def _chart_inference_time(models: list[str], extracted: dict, reports_dir: Path,
     return out
 
 
+def _short_model(name: str) -> str:
+    """Shorten model name for table cell (multiline, fits narrow column)."""
+    mapping = {
+        "deepseek-coder": "DeepSeek\nCoder 6.7b",
+        "qwen2.5-coder":  "Qwen2.5\nCoder 7b",
+        "codellama":      "CodeLlama\n7b",
+        "mistral":        "Mistral\n7b",
+        "llama3.1":       "Llama 3.1\n8b",
+    }
+    base = name.split(":")[0]
+    return mapping.get(base, name)
+
+
 def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
                        timestamp: str, source: str) -> Path:
     """Tabel statistik confidence: mean, std, min, max per model."""
     plt.rcParams.update(_RCPARAMS)
 
-    fig, ax = plt.subplots(figsize=(10, 3.2))
+    # Narrower figure: 7.5 in wide fits A4 text block comfortably at 150 dpi.
+    fig, ax = plt.subplots(figsize=(7.5, 3.0))
     fig.patch.set_facecolor("white")
     ax.axis("off")
 
     col_labels = ["Model", "Mean", "Std Dev", "Min", "Max",
-                  "Compliance", "Avg Time (s)"]
+                  "Fmt OK", "Avg Time\n(s)"]
     rows = []
     for m in models:
         conf = extracted[m]["conf_runs"]
@@ -290,13 +304,13 @@ def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
         avg_t = np.mean(time_runs) if time_runs else 0.0
 
         rows.append([
-            m,
-            f"{mean_c:.3f}",
-            f"{std_c:.3f}",
-            f"{min_c:.3f}",
-            f"{max_c:.3f}",
+            _short_model(m),
+            f"{mean_c:.2f}",
+            f"{std_c:.2f}",
+            f"{min_c:.2f}",
+            f"{max_c:.2f}",
             f"{extracted[m]['fmt_rate'] * 100:.0f}%",
-            f"{avg_t:.2f}",
+            f"{avg_t:.1f}",
         ])
 
     tbl = ax.table(
@@ -306,14 +320,20 @@ def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
         loc="center",
     )
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(9)
-    tbl.scale(1.0, 1.6)
+    tbl.set_fontsize(10)
+    tbl.scale(1.0, 1.9)
+
+    # Explicit column widths: model col wider, numeric cols narrower.
+    col_widths = [0.22, 0.11, 0.11, 0.11, 0.11, 0.11, 0.13]
+    for col_idx, w in enumerate(col_widths):
+        for row_idx in range(len(rows) + 1):
+            tbl[row_idx, col_idx].set_width(w)
 
     # Header row styling
     for col in range(len(col_labels)):
         cell = tbl[0, col]
         cell.set_facecolor("#2166AC")
-        cell.set_text_props(color="white", fontweight="bold")
+        cell.set_text_props(color="white", fontweight="bold", fontsize=9)
         cell.set_edgecolor("white")
 
     # Data rows: alternate shading
@@ -323,8 +343,6 @@ def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
             cell = tbl[row, col]
             cell.set_facecolor(bg)
             cell.set_edgecolor(GRID_C)
-            # Highlight best mean confidence (row with max mean)
-        # Color model name column with model color
         tbl[row, 0].set_text_props(color=MODEL_COLORS[row - 1], fontweight="bold")
 
     ax.set_title(

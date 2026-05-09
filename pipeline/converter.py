@@ -97,9 +97,10 @@ _LEVEL_SETS_FROM_PHP5: list[str] = [
     "LevelSetList::UP_TO_PHP_81",
     "LevelSetList::UP_TO_PHP_82",
     "LevelSetList::UP_TO_PHP_83",
+    "LevelSetList::UP_TO_PHP_85",
 ]
 
-# Shorter chain for PHP 7 -> PHP 8.3 upgrade
+# Shorter chain for PHP 7 -> PHP 8.5 upgrade
 _LEVEL_SETS_FROM_PHP7: list[str] = [
     "LevelSetList::UP_TO_PHP_70",
     "LevelSetList::UP_TO_PHP_71",
@@ -110,6 +111,7 @@ _LEVEL_SETS_FROM_PHP7: list[str] = [
     "LevelSetList::UP_TO_PHP_81",
     "LevelSetList::UP_TO_PHP_82",
     "LevelSetList::UP_TO_PHP_83",
+    "LevelSetList::UP_TO_PHP_85",
 ]
 
 # Mapping from --target-php version string to the final Rector level-set constant
@@ -119,6 +121,7 @@ _TARGET_VERSION_TO_LEVEL_SET: dict[str, str] = {
     "8.1": "LevelSetList::UP_TO_PHP_81",
     "8.2": "LevelSetList::UP_TO_PHP_82",
     "8.3": "LevelSetList::UP_TO_PHP_83",
+    "8.5": "LevelSetList::UP_TO_PHP_85",
 }
 
 # Code quality sets always appended after the level chain
@@ -267,11 +270,18 @@ def _snapshot_dir(root: Path) -> dict[Path, str]:
     return {p.resolve(): _hash_file(p) for p in root.rglob("*.php")}
 
 
-def _collect_php_files(root: Path) -> list[Path]:
-    """Return a sorted list of all .php files under *root*."""
+def _collect_php_files(
+    root: Path, exclude_dirs: frozenset[str] = frozenset()
+) -> list[Path]:
+    """Return a sorted list of all .php files under *root*, skipping excluded dirs."""
     if root.is_file() and root.suffix == ".php":
         return [root]
-    return sorted(root.rglob("*.php"))
+    if not exclude_dirs:
+        return sorted(root.rglob("*.php"))
+    return sorted(
+        p for p in root.rglob("*.php")
+        if not any(part in exclude_dirs for part in p.relative_to(root).parts)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +328,7 @@ class RectorConverter:
         input_path: Path,
         output_path: Path,
         target_version: str = "8.3",
+        exclude_dirs: list[str] | None = None,
     ) -> ConversionResult:
         """
         Convert PHP files from *input_path* and write results to *output_path*.
@@ -354,9 +365,15 @@ class RectorConverter:
         )
 
         t_start = time.perf_counter()
+        _exclude: frozenset[str] = frozenset(exclude_dirs) if exclude_dirs else frozenset()
+
+        if _exclude:
+            console.print(
+                f"[dim]Excluding directories: {', '.join(sorted(_exclude))}[/dim]"
+            )
 
         # 1. Collect source files
-        source_files = _collect_php_files(input_path)
+        source_files = _collect_php_files(input_path, _exclude)
         if not source_files:
             raise RuntimeError(f"No .php files found in: {input_path}")
         console.print(f"[dim]Found {len(source_files)} PHP file(s) in input.[/dim]")
@@ -379,7 +396,7 @@ class RectorConverter:
 
         # 4. Copy input -> output (never touch input/)
         output_path.mkdir(parents=True, exist_ok=True)
-        self._copy_tree(input_path, output_path)
+        self._copy_tree(input_path, output_path, _exclude)
         console.print(f"[dim]Copied {len(source_files)} file(s) -> {output_path}[/dim]")
 
         # 5. Snapshot SHA-256 hashes BEFORE Rector
@@ -564,7 +581,9 @@ class RectorConverter:
     # File copying
     # ------------------------------------------------------------------
 
-    def _copy_tree(self, src: Path, dst: Path) -> None:
+    def _copy_tree(
+        self, src: Path, dst: Path, exclude_dirs: frozenset[str] = frozenset()
+    ) -> None:
         """
         Recursively copy all .php files from *src* into *dst*, preserving
         the relative directory structure.
@@ -574,6 +593,8 @@ class RectorConverter:
         """
         for source_file in src.rglob("*.php"):
             relative = source_file.relative_to(src)
+            if exclude_dirs and any(part in exclude_dirs for part in relative.parts):
+                continue
             dest_file = dst / relative
             dest_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(source_file), str(dest_file))
@@ -968,6 +989,7 @@ def run_conversion(
     output_path: Path,
     rector_exe: Path | str = RECTOR_EXE,
     target_version: str = "8.3",
+    exclude_dirs: list[str] | None = None,
 ) -> ConversionResult:
     """
     Copy PHP files from *input_path* to *output_path* and run Rector.
@@ -1002,4 +1024,5 @@ def run_conversion(
         input_path=input_path,
         output_path=output_path,
         target_version=target_version,
+        exclude_dirs=exclude_dirs,
     )

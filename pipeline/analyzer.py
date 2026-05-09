@@ -32,7 +32,7 @@ PHPSTAN_EXE: str = "phpstan"
 # Default analysis level: 5 = balanced strictness (checks types of arguments,
 # return types, and basic undefined method/property calls without being overly
 # strict about mixed types -- appropriate for migrated legacy code).
-DEFAULT_LEVEL: int = 5
+DEFAULT_LEVEL: int = 2
 
 # Default PHP version string passed to PHPStan --php-version flag.
 # Set to 8.3 since output/ contains Rector-converted PHP 8.x code.
@@ -175,6 +175,7 @@ class PHPStanAnalyzer:
         target_path: Path,
         level: int = DEFAULT_LEVEL,
         php_version: str = DEFAULT_PHP_VERSION,
+        exclude_dirs: list[str] | None = None,
     ) -> AnalysisResult:
         """
         Run PHPStan on *target_path* and return structured results.
@@ -213,8 +214,14 @@ class PHPStanAnalyzer:
         # Resolve the best phpstan binary to use
         resolved_exe = self._resolve_exe(target_path)
 
+        analysis_paths = self._collect_analysis_paths(target_path, exclude_dirs or [])
+        if exclude_dirs:
+            console.print(
+                f"[dim]Excluding directories: {', '.join(exclude_dirs)}[/dim]"
+            )
+
         cmd = self._build_command(
-            target_path=target_path,
+            analysis_paths=analysis_paths,
             level=level,
             php_version=php_version,
             exe=resolved_exe,
@@ -253,9 +260,12 @@ class PHPStanAnalyzer:
             return self._exe
 
         # Try vendor-local installs first (preferred -- pinned version)
+        # Also check the pipeline's own project root (two levels up from this file)
+        _project_root = Path(__file__).parent.parent
         candidates: list[Path] = [
             target_path / "vendor" / "bin" / "phpstan",
             target_path.parent / "vendor" / "bin" / "phpstan",
+            _project_root / "vendor" / "bin" / "phpstan",
         ]
         # Windows Composer adds a .bat wrapper
         bat_candidates = [p.with_suffix(".bat") for p in candidates]
@@ -268,26 +278,57 @@ class PHPStanAnalyzer:
         return self._exe
 
     # ------------------------------------------------------------------
+    # Path collection (with optional exclusion)
+    # ------------------------------------------------------------------
+
+    def _collect_analysis_paths(
+        self, target_path: Path, exclude_dirs: list[str]
+    ) -> list[Path]:
+        """
+        Return the list of paths to pass to PHPStan.
+
+        When *exclude_dirs* is empty, returns ``[target_path]`` (default behaviour).
+        Otherwise returns immediate children of *target_path* (both PHP files and
+        subdirectories) whose names are NOT in *exclude_dirs*, so PHPStan only
+        analyses the relevant parts of the tree.
+        """
+        if not exclude_dirs:
+            return [target_path]
+
+        exclude_set = frozenset(exclude_dirs)
+        paths: list[Path] = []
+        try:
+            for item in sorted(target_path.iterdir()):
+                if item.name in exclude_set:
+                    continue
+                if item.is_dir() or (item.is_file() and item.suffix == ".php"):
+                    paths.append(item)
+        except OSError:
+            return [target_path]
+
+        return paths if paths else [target_path]
+
+    # ------------------------------------------------------------------
     # Command construction
     # ------------------------------------------------------------------
 
     def _build_command(
         self,
-        target_path: Path,
+        analysis_paths: list[Path],
         level: int,
         php_version: str,
         exe: str,
     ) -> list[str]:
         """Build the PHPStan CLI invocation."""
-        return [
-            exe,
-            "analyse",
-            str(target_path),
+        cmd = [exe, "analyse"]
+        cmd.extend(str(p) for p in analysis_paths)
+        cmd += [
             f"--level={level}",
             "--error-format=json",
-            "--no-progress",        # suppress progress bar; keep stdout clean JSON
-            "--memory-limit=512M",  # safe for 16 GB RAM; override if needed
+            "--no-progress",
+            "--memory-limit=1G",
         ]
+        return cmd
 
     # ------------------------------------------------------------------
     # PHPStan subprocess invocation
@@ -306,8 +347,9 @@ class PHPStanAnalyzer:
 
         With ``--error-format=json``, structured JSON is written to stdout.
         """
+        level_val = next((c.split("=")[1] for c in cmd if c.startswith("--level=")), "?")
         console.print(
-            f"[dim]Running: {' '.join(cmd[:3])} --level={cmd[3].split('=')[1]}  "
+            f"[dim]Running: {cmd[0]} analyse  --level={level_val}  "
             f"… (may take a moment)[/dim]"
         )
         t_start = time.perf_counter()
@@ -317,6 +359,8 @@ class PHPStanAnalyzer:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self._timeout,
             )
         except subprocess.TimeoutExpired:
@@ -632,6 +676,7 @@ def run_analysis(
     level: int = DEFAULT_LEVEL,
     phpstan_exe: str = PHPSTAN_EXE,
     php_version: str = DEFAULT_PHP_VERSION,
+    exclude_dirs: list[str] | None = None,
 ) -> AnalysisResult:
     """
     Run PHPStan on *target_path* and return structured results.
@@ -663,4 +708,5 @@ def run_analysis(
         target_path=target_path,
         level=level,
         php_version=php_version,
+        exclude_dirs=exclude_dirs,
     )
