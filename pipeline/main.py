@@ -310,6 +310,18 @@ def _parse_args() -> argparse.Namespace:
             "Default: none (all directories included)."
         ),
     )
+    parser.add_argument(
+        "--phpstan-level",
+        dest="phpstan_level",
+        type=int,
+        default=5,
+        metavar="LEVEL",
+        help=(
+            "PHPStan analysis level (0-9). "
+            "0 = basic checks only; 9 = strictest (requires full type annotations). "
+            "Default: 5 (balanced — checks types, undefined identifiers, dead code)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -371,6 +383,7 @@ def run_pipeline(
     max_code_chars: int = 2000,
     selected_models: list[str] | None = None,
     exclude_dirs: list[str] | None = None,
+    phpstan_level: int = 5,
 ) -> PipelineResult:
     """
     Execute all six pipeline stages in order and return a ``PipelineResult``.
@@ -505,7 +518,7 @@ def run_pipeline(
     console.print(
         Panel(
             "[bold blue]Step 4 / 6 -- Static Analysis (PHPStan)[/bold blue]\n"
-            f"[dim]Target: {output_dir.resolve()}  |  PHP {target_version}  |  Level 5[/dim]",
+            f"[dim]Target: {output_dir.resolve()}  |  PHP {target_version}  |  Level {phpstan_level}[/dim]",
             border_style="blue",
         )
     )
@@ -514,6 +527,7 @@ def run_pipeline(
         try:
             analysis = run_analysis(
                 target_path=output_dir,
+                level=phpstan_level,
                 php_version=target_version,
                 exclude_dirs=exclude_dirs,
             )
@@ -936,6 +950,7 @@ def main() -> None:
             f"Quality check : {quality_str}\n"
             f"PHP hint      : [yellow]{args.php_version}[/yellow]\n"
             f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]\n"
+            f"PHPStan level : [bold yellow]{args.phpstan_level}[/bold yellow]\n"
             f"Temperature   : [yellow]{args.temperature}[/yellow]\n"
             f"Context window: [yellow]{args.context_window}[/yellow] chars\n"
             f"Models filter : [yellow]{models_str}[/yellow]\n"
@@ -964,6 +979,7 @@ def main() -> None:
         max_code_chars=args.context_window,
         selected_models=selected_models,
         exclude_dirs=args.exclude if args.exclude else None,
+        phpstan_level=args.phpstan_level,
     )
 
     sys.exit(0 if result.is_compliant else 1)
