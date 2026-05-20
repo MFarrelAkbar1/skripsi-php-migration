@@ -74,6 +74,65 @@ _ERROR_RULES: list[tuple[tuple[str, ...], str, list[str]]] = [
 # Fallback when no rule matches: generic secure coding
 _DEFAULT_ISO: list[str] = ["A.8.28"]
 
+# ---------------------------------------------------------------------------
+# CI3 framework false-positive filter
+# ---------------------------------------------------------------------------
+# PHPStan cannot see CodeIgniter 3's dynamic architecture: the base classes
+# live in system/ (excluded), constants are defined at runtime in index.php,
+# and Composer vendor/ is not copied to output/.  All errors matching these
+# substrings are CI3 structural noise, not real application bugs.
+_CI3_NOISE_SUBSTRINGS: tuple[str, ...] = (
+    # CI3 base class hierarchy (system/ excluded from analysis)
+    "extends unknown class CI_",
+    "extends unknown class MX_",
+    # CI3 runtime constants (defined by index.php, invisible to static analysis)
+    "Constant ENVIRONMENT not found",
+    "Constant FCPATH not found",
+    "Constant APPPATH not found",
+    "Constant BASEPATH not found",
+    "Constant EXT not found",
+    # CI3 built-in magic properties accessed via $this->
+    "::$load.", "::$db.", "::$input.", "::$output.",
+    "::$config.", "::$session.", "::$uri.", "::$router.",
+    "::$security.", "::$form_validation.", "::$email.",
+    "::$upload.", "::$pagination.", "::$cache.", "::$lang.",
+    "::$benchmark.", "::$hooks.",
+    # CI3 URL / form / template helpers (loaded by CI3, not in PHPStan scope)
+    "Function base_url not found",
+    "Function site_url not found",
+    "Function redirect not found",
+    "Function anchor not found",
+    "Function form_open not found",
+    "Function form_close not found",
+    "Function set_value not found",
+    "Function form_error not found",
+    "Function validation_errors not found",
+    "Function get_instance not found",
+    "Function log_message not found",
+    "Function show_error not found",
+    "Function show_404 not found",
+    "Function html_escape not found",
+    "Function set_status_header not found",
+    "Function current_url not found",
+    "Function previous_url not found",
+    "Function strip_image_tags not found",
+    "Function encode_php_tags not found",
+    "Function function_usable not found",
+    "Function is_https not found",
+    "Function is_cli not found",
+    "Function remove_invisible_characters not found",
+    # Composer packages absent from output/ (vendor/ not copied by Rector)
+    "unknown class Dotenv\\",
+    "createUnsafeImmutable",
+    "createMutable",
+    "unknown class PhpOffice\\",
+    "unknown class Firebase\\",
+    "unknown class Google\\",
+    "unknown class chriskacerguis\\",
+    "unknown class Kreait\\",
+    "unknown class Ngekoding\\",
+)
+
 console = Console()
 
 
@@ -118,6 +177,7 @@ class AnalysisSummary:
     php_version: str = DEFAULT_PHP_VERSION
     duration_sec: float = 0.0
     phpstan_parse_errors: list[str] = field(default_factory=list)  # top-level PHPStan errors
+    framework_noise_count: int = 0  # CI3 false positives filtered from error list
 
 
 @dataclass
@@ -228,7 +288,7 @@ class PHPStanAnalyzer:
         )
         exit_code, stdout, stderr, elapsed = self._invoke_phpstan(cmd)
         raw = self._parse_phpstan_json(stdout, stderr, exit_code)
-        errors = self._build_errors(raw)
+        errors, noise_count = self._build_errors(raw)
         errors.sort(key=lambda e: e.sort_key())
         summary = self._build_summary(
             errors=errors,
@@ -236,6 +296,7 @@ class PHPStanAnalyzer:
             elapsed=elapsed,
             level=level,
             php_version=php_version,
+            noise_count=noise_count,
         )
         result = AnalysisResult(errors=errors, summary=summary, raw_output=raw)
         self._print_results(result)
@@ -449,6 +510,15 @@ class PHPStanAnalyzer:
         return data
 
     # ------------------------------------------------------------------
+    # CI3 noise detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_ci3_noise(message: str) -> bool:
+        """Return True if message is a CodeIgniter 3 framework false positive."""
+        return any(pattern in message for pattern in _CI3_NOISE_SUBSTRINGS)
+
+    # ------------------------------------------------------------------
     # Error classification
     # ------------------------------------------------------------------
 
@@ -471,20 +541,30 @@ class PHPStanAnalyzer:
     # Error list construction
     # ------------------------------------------------------------------
 
-    def _build_errors(self, raw: dict) -> list[AnalysisError]:
+    def _build_errors(self, raw: dict) -> tuple[list[AnalysisError], int]:
         """
         Convert PHPStan's parsed JSON into a flat list of ``AnalysisError``.
 
         Handles both file-specific messages (``raw["files"]``) and top-level
         parse/config errors (``raw["errors"]``).
+
+        Returns
+        -------
+        (errors, noise_count)
+            ``errors`` contains real application errors only.
+            ``noise_count`` counts CI3 framework false positives that were filtered.
         """
         result: list[AnalysisError] = []
+        noise_count: int = 0
 
         # File-specific errors
         for file_path, file_data in raw.get("files", {}).items():
             for msg_entry in file_data.get("messages", []):
                 message: str = msg_entry.get("message", "")
                 line: int = msg_entry.get("line", 0) or 0
+                if self._is_ci3_noise(message):
+                    noise_count += 1
+                    continue
                 severity, iso_controls = self._classify_error(message)
                 result.append(
                     AnalysisError(
@@ -499,6 +579,9 @@ class PHPStanAnalyzer:
         # Top-level PHPStan errors (config issues, parse failures, etc.)
         for err in raw.get("errors", []):
             if isinstance(err, str) and err.strip():
+                if self._is_ci3_noise(err):
+                    noise_count += 1
+                    continue
                 severity, iso_controls = self._classify_error(err)
                 result.append(
                     AnalysisError(
@@ -510,7 +593,7 @@ class PHPStanAnalyzer:
                     )
                 )
 
-        return result
+        return result, noise_count
 
     # ------------------------------------------------------------------
     # Summary construction
@@ -523,6 +606,7 @@ class PHPStanAnalyzer:
         elapsed: float,
         level: int,
         php_version: str,
+        noise_count: int = 0,
     ) -> AnalysisSummary:
         """Aggregate error list into an AnalysisSummary."""
         by_file: dict[str, int] = {}
@@ -554,6 +638,7 @@ class PHPStanAnalyzer:
             php_version=php_version,
             duration_sec=round(elapsed, 2),
             phpstan_parse_errors=parse_errors,
+            framework_noise_count=noise_count,
         )
 
     # ------------------------------------------------------------------
@@ -657,12 +742,18 @@ class PHPStanAnalyzer:
 
     def _print_footer(self, s: AnalysisSummary) -> None:
         """Print the one-line summary footer."""
+        noise_note = (
+            f"  |  [dim]CI3 framework noise filtered: {s.framework_noise_count}[/dim]"
+            if s.framework_noise_count
+            else ""
+        )
         console.print(
             f"\n[bold]Total errors:[/bold] [red]{s.total_errors}[/red]  |  "
             f"[bold]Files with errors:[/bold] {s.total_files_analysed}  |  "
             f"[bold]Level:[/bold] {s.phpstan_level}  |  "
             f"[bold]PHP:[/bold] {s.php_version}  |  "
-            f"[bold]Time:[/bold] {s.duration_sec}s\n"
+            f"[bold]Time:[/bold] {s.duration_sec}s"
+            f"{noise_note}\n"
         )
 
 

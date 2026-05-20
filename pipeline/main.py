@@ -42,7 +42,7 @@ from rich.table import Table
 try:
     from pipeline.scanner import ScanResult, run_scan
     from pipeline.converter import ConversionResult, run_conversion
-    from pipeline.analyzer import AnalysisResult, run_analysis
+    from pipeline.analyzer import AnalysisError, AnalysisResult, run_analysis
     from pipeline.ai_engine import (
         AIRecommendation,
         COMPARISON_MODELS,
@@ -63,7 +63,7 @@ try:
 except ModuleNotFoundError:
     from scanner import ScanResult, run_scan                    # type: ignore[no-redef]
     from converter import ConversionResult, run_conversion      # type: ignore[no-redef]
-    from analyzer import AnalysisResult, run_analysis          # type: ignore[no-redef]
+    from analyzer import AnalysisError, AnalysisResult, run_analysis  # type: ignore[no-redef]
     from ai_engine import (                                     # type: ignore[no-redef]
         AIRecommendation,
         COMPARISON_MODELS,
@@ -367,6 +367,82 @@ def _maybe_clean_output_dir(output_dir: Path) -> None:
         sys.exit(0)
 
 
+def _read_code_snippet(file_path: str, line: int, context: int = 5) -> str:
+    """Read lines around *line* from *file_path* to use as AI code context."""
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        start = max(0, line - context - 1)
+        end = min(len(lines), line + context)
+        return "\n".join(lines[start:end])
+    except OSError:
+        return ""
+
+
+def _phpstan_errors_to_scan_findings(
+    errors: list[AnalysisError],
+    max_findings: int = 20,
+) -> list:
+    """Convert PHPStan AnalysisError list to ScanFinding objects for AI analysis.
+
+    Deduplicates by message pattern, reads code snippets from output files,
+    and limits to *max_findings* to keep AI inference time reasonable.
+    """
+    try:
+        try:
+            from pipeline.scanner import ScanFinding
+        except ModuleNotFoundError:
+            from scanner import ScanFinding  # type: ignore[no-redef]
+    except ImportError:
+        return []
+
+    findings = []
+    seen_keys: set[str] = set()
+
+    for err in errors:
+        # Deduplicate: same message pattern across files is the same issue
+        msg_key = err.message[:80]
+        if msg_key in seen_keys:
+            continue
+        seen_keys.add(msg_key)
+
+        snippet = _read_code_snippet(err.file_path, err.line)
+        if not snippet.strip():
+            continue  # skip errors with no readable code
+
+        msg_lower = err.message.lower()
+        if any(k in msg_lower for k in ("deprecated", "removed in php")):
+            vuln_type, priority = "Deprecated API", 3
+        elif any(k in msg_lower for k in ("undefined", "not found", "unknown class")):
+            vuln_type, priority = "Undefined Symbol", 4
+        elif any(k in msg_lower for k in ("type", "incompatible", "null", "expects")):
+            vuln_type, priority = "Type Error", 4
+        else:
+            vuln_type, priority = "Static Analysis Error", 5
+
+        findings.append(ScanFinding(
+            rule_id=f"phpstan.{vuln_type.lower().replace(' ', '_')}",
+            file_path=err.file_path,
+            line_start=err.line,
+            line_end=err.line,
+            col_start=0,
+            col_end=0,
+            message=err.message,
+            severity=err.severity,
+            code_snippet=snippet,
+            vuln_type=vuln_type,
+            iso_controls=err.iso_controls,
+            priority=priority,
+        ))
+
+        if len(findings) >= max_findings:
+            break
+
+    return findings
+
+
 def run_pipeline(
     input_dir: Path,
     output_dir: Path,
@@ -597,9 +673,25 @@ def run_pipeline(
                 ai_recs = run_ai_analysis(pre_scan.findings, model=model)
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[bold red]AI analysis failed:[/bold red] {exc}")
+        elif analysis and analysis.errors:
+            console.print(
+                "[dim]No Semgrep findings -- falling back to PHPStan errors "
+                f"(top 20 deduplicated) for AI analysis.[/dim]"
+            )
+            try:
+                phpstan_findings = _phpstan_errors_to_scan_findings(analysis.errors)
+                if phpstan_findings:
+                    console.print(
+                        f"[dim]Sending {len(phpstan_findings)} PHPStan findings to AI...[/dim]"
+                    )
+                    ai_recs = run_ai_analysis(phpstan_findings, model=model)
+                else:
+                    console.print("[dim]No readable PHPStan snippets -- AI skipped.[/dim]")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[bold red]AI analysis (PHPStan fallback) failed:[/bold red] {exc}")
         else:
             console.print(
-                "[dim]No pre-scan findings -- AI review step skipped.[/dim]"
+                "[dim]No findings from Semgrep or PHPStan -- AI review step skipped.[/dim]"
             )
 
     # ------------------------------------------------------------------ #
@@ -895,6 +987,7 @@ def _analysis_summary_to_dict(analysis: AnalysisResult | None) -> dict | None:
     s = analysis.summary
     return {
         "total_errors": s.total_errors,
+        "framework_noise_filtered": s.framework_noise_count,
         "total_files_analysed": s.total_files_analysed,
         "by_severity": s.by_severity,
         "by_iso_control": s.by_iso_control,

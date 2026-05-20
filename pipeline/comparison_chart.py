@@ -7,7 +7,7 @@ Menghasilkan 4 chart perbandingan FT UGM (mck) vs CBT DTI:
   3. PHPStan errors by ISO 27001:2022 control
   4. Composer dependency PHP 8.x status
 
-Output: charts/comparison/comparison_<N>_<name>.png
+Output: reports/comparison/comparison_<N>_<name>.png
 """
 
 from __future__ import annotations
@@ -239,7 +239,7 @@ def chart3_phpstan(mck: dict, cbt: dict, out_dir: Path) -> Path:
     _bar_label(ax, bars_cbt, offset=10)
 
     ax.set_title("PHPStan Errors by ISO/IEC 27001:2022 Control\n"
-                 "(Catatan: Seluruhnya merupakan false positive akibat framework CI3)")
+                 "(Application code only; CI3 framework noise filtered out)")
     ax.set_ylabel("Jumlah Error")
     ax.set_xticks(x)
     ax.set_xticklabels(controls)
@@ -365,8 +365,8 @@ def chart4_composer_and_summary(mck: dict, cbt: dict, out_dir: Path) -> Path:
                      fontsize=8.2, fontweight=weight, color=color, va="center")
 
     ax2.text(0.0, start_y - len(rows)*row_h - 0.04,
-             "* PHPStan errors: false positive (CI3 framework magic properties)\n"
-             "* ISO NON-COMPLIANT karena PHPStan errors tersebut",
+             "* PHPStan errors: application code only; CI3 noise filtered (mck: 740, CBT: 1103)\n"
+             "* CBT PHPStan scoped to application/ (excl. libraries) due to TCPDF/PHPExcel memory limit",
              transform=ax2.transAxes, fontsize=7, color="#888888", va="top")
 
     ax2.set_title("Ringkasan Perbandingan Pipeline", pad=10)
@@ -386,13 +386,13 @@ def chart4_composer_and_summary(mck: dict, cbt: dict, out_dir: Path) -> Path:
 
 def main() -> None:
     root = Path(__file__).parent.parent
-    mck_path = root / "reports" / "pipeline_result_20260430_083319.json"
-    cbt_path = root / "reports" / "cbt" / "pipeline_result_20260508_171545.json"
+    mck_path = root / "reports" / "mck" / "pipeline_result_20260519_075958.json"
+    cbt_path = root / "reports" / "cbt_new" / "pipeline_result_20260519_082600.json"
 
     mck = json.loads(mck_path.read_text(encoding="utf-8"))
     cbt = json.loads(cbt_path.read_text(encoding="utf-8"))
 
-    out_dir = root / "charts" / "comparison"
+    out_dir = root / "reports" / "comparison"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Generating comparison charts...")
