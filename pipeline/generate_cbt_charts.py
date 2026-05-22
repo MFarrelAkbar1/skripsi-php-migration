@@ -177,15 +177,15 @@ def dti_1a_semgrep_severity(data: dict, out_dir: Path) -> Path:
     ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     _style_ax(ax, "v")
 
-    # Annotation at bottom so it doesn't clash with bars
-    ax.text(0.99, 0.04,
-            "Semua findings berasal dari system/core/Output.php (CI3 framework)\n"
-            "Kode aplikasi CBT custom = 0 Semgrep findings",
-            transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=8, color="#555555", style="italic",
-            bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=SPINE_C, linewidth=0.7))
+    # Annotation in figure space below axes -- avoids any bar overlap
+    fig.text(0.99, 0.07,
+             "Semua findings berasal dari system/core/Output.php (CI3 framework)\n"
+             "Kode aplikasi CBT custom = 0 Semgrep findings",
+             ha="right", va="bottom",
+             fontsize=8, color="#555555", style="italic",
+             bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=SPINE_C, linewidth=0.7))
 
-    fig.tight_layout(rect=[0, 0.05, 1, 1])
+    fig.tight_layout(rect=[0, 0.15, 1, 1])
     _footer(fig, SK2_JSON.name)
     return _save(fig, out_dir / "pipeline_chart_cbt_full_1a_semgrep_severity.png")
 
@@ -315,7 +315,7 @@ def dti_2b_rector_pie(data: dict, out_dir: Path) -> Path:
     failed    = conv.get("failed",    0)
     total     = conv.get("total_files", converted + skipped + failed)
 
-    fig, ax = plt.subplots(figsize=(7, 6))
+    fig, ax = plt.subplots(figsize=(7, 8))
     fig.patch.set_facecolor("white")
 
     sizes   = [converted, skipped, failed]
@@ -341,18 +341,21 @@ def dti_2b_rector_pie(data: dict, out_dir: Path) -> Path:
         at.set_color("white")
 
     patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colors, labels)]
-    ax.legend(handles=patches, loc="lower center",
-              bbox_to_anchor=(0.5, -0.22), ncol=1, framealpha=0.88, fontsize=9.5,
+    # loc="upper center": the legend's top-center anchor sits just below the axes
+    ax.legend(handles=patches, loc="upper center",
+              bbox_to_anchor=(0.5, -0.04), ncol=1, framealpha=0.88, fontsize=9.5,
               edgecolor=SPINE_C)
 
     ax.set_title("Proporsi Hasil Konversi Rector\n(CBT DTI, cbt_full -- Target PHP 8.3)", pad=10)
 
-    ax.text(0.5, -0.42,
-            "2 failures: captcha_helper.php & form_helper.php\n(known Rector Fiber bug -- bukan error kode CBT)",
-            transform=ax.transAxes, ha="center", va="top",
-            fontsize=8, color="#888888", style="italic")
+    # Force pie axes into the upper portion so the legend has clear space below
+    fig.subplots_adjust(left=0.05, right=0.95, bottom=0.36, top=0.92)
 
-    fig.tight_layout(rect=[0, 0.08, 1, 1])
+    fig.text(0.5, 0.05,
+             "2 failures: captcha_helper.php & form_helper.php\n"
+             "(known Rector Fiber bug -- bukan error kode CBT)",
+             ha="center", va="bottom",
+             fontsize=8, color="#888888", style="italic")
     _footer(fig, SK2_JSON.name)
     return _save(fig, out_dir / "pipeline_chart_cbt_full_2b_rector_pie.png")
 
