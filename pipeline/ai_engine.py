@@ -41,7 +41,7 @@ except ModuleNotFoundError:
 # ---------------------------------------------------------------------------
 
 OLLAMA_BASE_URL: str = "http://localhost:11434"
-OLLAMA_MODEL: str = "deepseek-coder:6.7b"
+OLLAMA_MODEL: str = "qwen2.5-coder:7b"
 
 # All models used in the zero-shot LLM comparison experiment (thesis).
 COMPARISON_MODELS: list[str] = [

@@ -177,7 +177,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         dest="model",
-        default="deepseek-coder:6.7b",
+        default="qwen2.5-coder:7b",
         metavar="MODEL",
         help=(
             "Ollama model identifier for the single-model AI analysis step. "
