@@ -153,16 +153,15 @@ def chart1_semgrep(mck: dict, cbt: dict) -> Path:
     ax.legend(framealpha=0.85, fontsize=9)
     _style_ax(ax)
 
-    ax.text(0.02, 0.05,
-            f"Total: FT UGM = {total_mck}  |  CBT DTI = {total_cbt}\n"
-            "Semua findings berasal dari CI3 system/core/Output.php (framework)\n"
-            "Kode aplikasi custom kedua dataset = 0 findings  |  Delta post-conversion = 0 (kedua SK)",
-            transform=ax.transAxes, ha="left", va="bottom",
-            fontsize=8, color="#555555",
-            bbox=dict(boxstyle="round,pad=0.35", facecolor="white",
-                      edgecolor=SPINE_C, linewidth=0.7))
-
-    fig.tight_layout(rect=[0, 0.06, 1, 1])
+    fig.tight_layout(rect=[0, 0.20, 1, 1])
+    fig.text(0.03, 0.08,
+             f"Total: FT UGM = {total_mck}  |  CBT DTI = {total_cbt}\n"
+             "Semua findings berasal dari CI3 system/core/Output.php (framework)\n"
+             "Kode aplikasi custom kedua dataset = 0 findings  |  Delta post-conversion = 0 (kedua SK)",
+             ha="left", va="bottom",
+             fontsize=8, color="#555555",
+             bbox=dict(boxstyle="round,pad=0.35", facecolor="white",
+                       edgecolor=SPINE_C, linewidth=0.7))
     _footer(fig)
     return _save(fig, "comparison_qwen_1_semgrep_findings.png")
 

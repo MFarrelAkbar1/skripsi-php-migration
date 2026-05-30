@@ -263,7 +263,7 @@ def chart_2a_rector_bar(data: dict, out_dir: Path) -> Path:
     ax.legend(fontsize=9.5, frameon=True, framealpha=0.9, edgecolor=GRID_C, loc="upper right")
     _style_ax(ax, "v")
 
-    ax.text(0.5, 1.005,
+    ax.text(0.5, 1.14,
             f"Conversion Rate: {cr_pct:.1f}%",
             transform=ax.transAxes, ha="center", va="bottom",
             fontsize=12, fontweight="bold", color=OK_COLOR)
