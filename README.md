@@ -1,307 +1,336 @@
-# PHP Legacy Migration Pipeline - Skripsi Muhammad Farrel Akbar
+# PHP Legacy Migration Pipeline
 
-Sistem Otomatis Migrasi Kode PHP 7.4 ke PHP 8.x dengan Kerangka Keamanan ISO/IEC 27001:2022
+**Sistem Otomatis Migrasi Kode PHP 7.4 ke PHP 8.x dengan Kerangka Keamanan ISO/IEC 27001:2022**
+
+Penelitian skripsi **Muhammad Farrel Akbar** — Kolaborasi studi kasus dengan **FT UGM (Fakultas Teknik, Universitas Gadjah Mada)**.
 
 ---
 
 ## Deskripsi Proyek
 
-Penelitian skripsi ini mengembangkan **pipeline otomatis** untuk migrasi kode PHP legacy (PHP 7.4) ke PHP 8.x modern dengan fokus pada **keamanan dan kepatuhan ISO/IEC 27001:2022**. 
-
-### Tujuan Utama
-- Mengotomatisasi konversi kode PHP 7.4 -> PHP 8.x menggunakan Rector
-- Mengidentifikasi kerentanan keamanan dengan Semgrep dan analisis statis
-- Memberikan rekomendasi perbaikan berbasis AI (DeepSeek Coder 6.7B)
-- Memetakan temuan ke kontrol keamanan ISO/IEC 27001:2022
-- Memastikan privasi data dengan menjalankan AI model secara lokal (Ollama)
+Pipeline otomatis untuk migrasi kode PHP legacy (PHP 7.4) ke PHP 8.x dengan fokus pada keamanan dan kepatuhan ISO/IEC 27001:2022. Seluruh inferensi AI berjalan **lokal via Ollama** — tidak ada kode yang dikirim ke API eksternal (privasi data terjamin).
 
 ### Studi Kasus
-Kolaborasi dengan **DTI UGM** - migrasi aplikasi web PHP 7.4 legacy ke PHP 8.x dengan standar keamanan tinggi.
+
+Aplikasi web berbasis **CodeIgniter 3.x** dari FT UGM — 245 file PHP.
+
+### Tujuan Penelitian
+
+- Mengotomatisasi konversi PHP 7.4 ke PHP 8.x menggunakan Rector
+- Mendeteksi kerentanan keamanan dengan Semgrep + PHPStan
+- Membandingkan 5 model LLM lokal secara zero-shot untuk rekomendasi perbaikan kode
+- Memetakan seluruh temuan ke kontrol ISO/IEC 27001:2022
+- Menjamin privasi data dengan inferensi lokal via Ollama
 
 ---
 
 ## Stack Teknologi
 
-| Komponen | Teknologi | Versi | Fungsi |
-|----------|-----------|-------|--------|
-| AI Model | DeepSeek Coder via Ollama | 6.7B | Rekomendasi perbaikan kode |
-| Code Conversion | Rector | v2.3+ | Migrasi PHP 7.4 -> PHP 8.x otomatis |
-| Static Analysis | PHPStan / Psalm | v2.1+ | Validasi tipe, error detection |
-| Security Scanning | Semgrep | latest | Deteksi kerentanan (SQL Injection, XSS) |
-| Backend Pipeline | Python | 3.11+ | Orkestrasi keseluruhan pipeline |
-| Output Formatting | Rich (Python) | v13.0+ | Terminal UI yang user-friendly |
-| PHP Runtime | PHP | 8.0+ | Untuk menjalankan Rector |
+| Komponen | Teknologi | Fungsi |
+|---|---|---|
+| Konversi kode | Rector | Migrasi otomatis PHP 7.4 -> PHP 8.x |
+| Scan keamanan | Semgrep (`p/php`, `p/owasp-top-ten`) | Deteksi kerentanan pre & post konversi |
+| Analisis statis | PHPStan | Validasi tipe, method existence, dead code |
+| AI lokal | Ollama + 5 LLM (lihat bawah) | Rekomendasi perbaikan keamanan |
+| Backend pipeline | Python 3.11+ | Orkestrasi 6-step pipeline |
+| Terminal UI | Rich v13+ | Output pipeline yang terstruktur |
+| Visualisasi | Matplotlib | Chart perbandingan LLM & metrik akurasi |
+
+### Model LLM yang Dibandingkan (Zero-Shot Comparison)
+
+| Model | Parameter | Default |
+|---|---|---|
+| `qwen2.5-coder:7b` | 7B | Ya (current default) |
+| `deepseek-coder:6.7b` | 6.7B | |
+| `codellama:7b` | 7B | |
+| `mistral:7b` | 7B | |
+| `llama3.1:8b` | 8B | |
 
 ---
 
-## Instalasi Cepat
+## Struktur Folder
+
+```
+skripsi-php-migration/
+├── CLAUDE.md                       <- Aturan wajib dan konteks
+├── README.md                       <- File ini
+├── requirements.txt                <- Python dependencies
+├── composer.json                   <- PHP dependencies (Rector, PHPStan)
+│
+├── pipeline/                       <- Semua modul Python
+│   ├── main.py                     <- Entry point & orkestrasi 6-step
+│   ├── scanner.py                  <- Semgrep security scanning
+│   ├── converter.py                <- Rector PHP conversion
+│   ├── analyzer.py                 <- PHPStan static analysis
+│   ├── ai_engine.py                <- Ollama / LLM integration & comparison
+│   ├── iso_mapper.py               <- ISO 27001:2022 compliance mapping
+│   ├── composer_analyzer.py        <- Analisis kompatibilitas composer.json
+│   ├── llm_quality_checker.py      <- Syntax validity rate per model
+│   ├── accuracy_checker.py         <- Metrik akurasi pipeline
+│   ├── accuracy_validator.py       <- Validasi hasil migrasi
+│   ├── capture_responses.py        <- Capture raw LLM responses
+│   ├── llm_comparison_chart.py     <- Chart perbandingan LLM
+│   ├── generate_condition_a_charts.py  <- Chart eksperimen kondisi A
+│   ├── generate_condition_b_charts.py  <- Chart eksperimen kondisi B
+│   └── pipeline_result_chart.py    <- Chart hasil pipeline keseluruhan
+│
+├── input/                          <- PHP 7.4 asli (JANGAN dimodifikasi)
+├── output/                         <- PHP 8.x hasil Rector
+├── reports/                        <- JSON reports + PNG charts
+├── rules/                          <- Semgrep rules lokal (pinned)
+├── tests/
+│   └── sample_php74/               <- 3 sample PHP untuk testing cepat
+│       ├── sample_login.php
+│       ├── sample_realistic.php
+│       └── sample_upload.php
+├── docs/
+│   ├── architecture.md
+│   ├── iso_controls.md
+│   └── pseudocode_appendix.md
+└── vendor/                         <- Composer packages
+```
+
+---
+
+## Instalasi
+
+### Prasyarat
+
+- Python 3.11+
+- PHP 8.0+ (untuk Rector & PHPStan)
+- Composer
+- Semgrep (`pip install semgrep` atau via package manager)
+- Ollama ([ollama.com](https://ollama.com))
+- RAM minimal 8GB (16GB direkomendasikan untuk model 7-8B)
+
+### Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/<org>/skripsi-php-migration.git
+# 1. Clone repository
+git clone https://github.com/farrel212/skripsi-php-migration.git
 cd skripsi-php-migration
 
-# Install Python dependencies
+# 2. Install Python dependencies
 pip install -r requirements.txt
 
-# Install PHP tools (Rector, PHPStan)
+# 3. Install PHP tools (Rector + PHPStan)
 composer install
 
-# (Opsional) Setup Ollama untuk AI step
+# 4. Pull semua model LLM via Ollama
+ollama pull qwen2.5-coder:7b
 ollama pull deepseek-coder:6.7b
-ollama serve  # jalankan di terminal terpisah
+ollama pull codellama:7b
+ollama pull mistral:7b
+ollama pull llama3.1:8b
 
-# Jalankan pipeline
-python pipeline/main.py --input tests/sample_php74
+# 5. (Opsional) Pin ruleset Semgrep agar reproducible
+mkdir rules
+semgrep --config p/php --dump-rules | Out-File -Encoding utf8 rules/php.yaml
+semgrep --config p/owasp-top-ten --dump-rules | Out-File -Encoding utf8 rules/owasp-top-ten.yaml
 ```
 
 ---
 
-## Cara Menggunakan Pipeline
+## Cara Menjalankan
 
-### Usage Dasar
+### Pipeline Utama
+
 ```bash
+# Pastikan Ollama berjalan di terminal terpisah
+ollama serve
+
+# Jalankan pipeline dengan sample test
 python pipeline/main.py --input tests/sample_php74
+
+# Jalankan dengan input kustom
+python pipeline/main.py --input path/to/php74/code
+
+# Skip AI step (lebih cepat, tanpa Ollama)
+python pipeline/main.py --input tests/sample_php74 --skip-ai
+
+# Verbose logging untuk debug
+python pipeline/main.py --input tests/sample_php74 --verbose
 ```
 
-### Dengan Custom Input Folder
-```bash
-python pipeline/main.py --input path/to/your/php74/code
-```
+### Script Analisis Tambahan
 
-### Command-Line Arguments
 ```bash
-python pipeline/main.py \
-  --input <path>        # Wajib: folder input PHP 7.4
-  --output output/      # Folder output (default: output/)
-  --reports reports/    # Folder reports (default: reports/)
-  --skip-ai             # Skip step 5 (AI review) untuk cepat
-  --verbose             # Verbose logging untuk debug
+# Perbandingan 5 model LLM (menghasilkan chart ke reports/)
+python pipeline/llm_comparison_chart.py
+
+# Cek syntax validity output AI per model
+python pipeline/llm_quality_checker.py
+
+# Generate chart eksperimen kondisi A/B
+python pipeline/generate_condition_a_charts.py
+python pipeline/generate_condition_b_charts.py
+
+# Analisis kompatibilitas composer.json dengan PHP 8
+python pipeline/composer_analyzer.py
 ```
 
 ---
 
 ## Alur Kerja Pipeline (6 Steps)
 
-Pipeline berjalan dengan urutan 6 langkah:
-
 ```
 INPUT (input/)
-   |
-   v
-[STEP 1: PRE-SCAN]   Semgrep scan kode asli (PHP 7.4)
-   |
-   v
-[STEP 2: CONVERT]    Rector konversi PHP 7.4 -> PHP 8.x
-   |
-   v
-OUTPUT (output/)     Kode PHP 8.x hasil konversi
-   |
-   v
-[STEP 3: POST-SCAN]  Semgrep scan kode hasil konversi
-   |
-   v
-[STEP 4: ANALYZE]    PHPStan static analysis & type checking
-   |
-   v
-[STEP 5: AI REVIEW]  DeepSeek Coder rekomendasi perbaikan
-   |
-   v
-[STEP 6: ISO MAP]    Pemetaan ke kontrol ISO 27001:2022
-   |
-   v
-REPORTS (reports/)   iso_report.json + pipeline_result.json
+    |
+    v
+[STEP 1: PRE-SCAN]     Semgrep scan kode PHP 7.4 asli
+    |
+    v
+[STEP 2: CONVERT]      Rector migrasi PHP 7.4 -> PHP 8.x (output ke output/)
+    |
+    v
+[STEP 3: POST-SCAN]    Semgrep scan kode PHP 8.x hasil konversi
+    |
+    v
+[STEP 4: ANALYZE]      PHPStan static analysis & type validation
+    |
+    v
+[STEP 5: AI REVIEW]    Ollama LLM -> rekomendasi perbaikan keamanan
+    |                  (bisa di-skip dengan --skip-ai)
+    v
+[STEP 6: ISO MAP]      Pemetaan ke kontrol ISO/IEC 27001:2022
+    |
+    v
+REPORTS (reports/)     iso_report_<timestamp>.json
+                       pipeline_result_<timestamp>.json
 ```
 
-### Detail Setiap Step
-
-**STEP 1: PRE-SCAN (Semgrep)**
-- Input: Folder input/ dengan PHP 7.4 asli
-- Tool: Semgrep dengan ruleset p/php + p/owasp-top-ten
-- Output: Daftar kerentanan sebelum konversi
-
-**STEP 2: CONVERT (Rector)**
-- Input: Kode PHP 7.4 dari input/
-- Tool: Rector dengan target PHP 8.0+
-- Output: Kode PHP 8.x di folder output/
-- Transformasi: mysql_* -> mysqli, modern syntax, type hints
-
-**STEP 3: POST-SCAN (Semgrep)**
-- Input: Kode PHP 8.x hasil Rector
-- Output: Daftar issue yang tersisa setelah konversi
-- Tujuan: Verifikasi tidak ada kerentanan baru
-
-**STEP 4: ANALYZE (PHPStan)**
-- Input: Kode PHP 8.x dari output/
-- Tool: PHPStan level 8 (strictness maksimum)
-- Output: Laporan validasi tipe, method existence, dead code
-
-**STEP 5: AI REVIEW (Ollama + DeepSeek Coder)**
-- Input: Issues dari Step 3 & 4
-- Output: AIRecommendation objects dengan patch suggestions
-
-**STEP 6: ISO MAPPING**
-- Input: Semua findings
-- Output: JSON report dengan status COMPLIANT / PARTIAL / NON_COMPLIANT
+| Step | Tool | Input | Output |
+|---|---|---|---|
+| PRE-SCAN | Semgrep | `input/` | Daftar kerentanan awal |
+| CONVERT | Rector | `input/` | `output/` (PHP 8.x) |
+| POST-SCAN | Semgrep | `output/` | Kerentanan yang tersisa |
+| ANALYZE | PHPStan | `output/` | Type errors, dead code |
+| AI REVIEW | Ollama (5 model) | Findings step 3 & 4 | Patch recommendations |
+| ISO MAP | iso_mapper | Semua findings | Compliance report JSON |
 
 ---
 
 ## Output yang Dihasilkan
 
-### 1. Folder output/ - Kode PHP 8.x Hasil Konversi
+### `output/` — Kode PHP 8.x Hasil Konversi
 
-Kode PHP 8.x siap untuk code review dan testing:
-- Kompatibel PHP 8.0+
-- Deprecated functions sudah diganti
-- Modern syntax (union types, nullsafe operator, property promotion)
+- Fungsi deprecated sudah diganti (`mysql_*` -> `mysqli`, `ereg_*` -> `preg_*`)
+- Syntax modern PHP 8.x (union types, nullsafe operator, named arguments)
+- Input asli di `input/` **tidak pernah dimodifikasi**
 
-### 2. Folder reports/ - Laporan Hasil Pipeline
+### `reports/` — Laporan & Chart
 
-**iso_report.json** - Laporan ISO 27001:2022
+| File | Deskripsi |
+|---|---|
+| `iso_report_<timestamp>.json` | Status kepatuhan per kontrol ISO 27001 |
+| `pipeline_result_<timestamp>.json` | Detail hasil setiap step pipeline |
+| `llm_comparison_<timestamp>.json` | Data mentah perbandingan 5 model LLM |
+| `llm_quality_<timestamp>.json` | Syntax validity rate per model |
+| `llm_chart_*_1_boxplot_confidence.png` | Boxplot confidence score 5 model |
+| `llm_chart_*_2_format_compliance.png` | Format compliance rate |
+| `llm_chart_*_3_inference_time.png` | Inference time comparison |
+| `llm_chart_*_4_stats_table.png` | Tabel statistik ringkasan |
+| `llm_quality_chart_<timestamp>.png` | Syntax validity rate chart |
+
+### Contoh `iso_report.json`
+
 ```json
 {
   "overall_status": "COMPLIANT",
   "findings_summary": { "total": 8, "resolved": 6 },
   "control_mapping": {
     "A.8.25": "COMPLIANT",
-    "A.8.28": "COMPLIANT"
+    "A.8.28": "COMPLIANT",
+    "A.8.29": "PARTIAL"
   }
 }
 ```
 
-**pipeline_result.json** - Detail setiap stage dengan status success/failed
-
 ---
 
-## Struktur Folder Proyek
+## Kerentanan yang Diprioritaskan
 
-```
-skripsi-php-migration/
-├── CLAUDE.md                # Aturan wajib dan konteks
-├── README.md                # File ini
-├── requirements.txt         # Python dependencies
-├── composer.json            # PHP dependencies
-├── pipeline/                # Core pipeline modules
-│   ├── main.py              # Entry point & orkestrasi
-│   ├── scanner.py           # Semgrep scanning
-│   ├── converter.py         # Rector conversion
-│   ├── analyzer.py          # PHPStan analysis
-│   ├── ai_engine.py         # Ollama/DeepSeek integration
-│   └── iso_mapper.py        # ISO 27001 mapping
-├── input/                   # PHP 7.4 files (input)
-├── output/                  # PHP 8.x files (Rector output)
-├── reports/                 # JSON reports hasil pipeline
-├── tests/sample_php74/      # Sample files untuk testing
-├── docs/                    # Dokumentasi (architecture, ISO controls)
-└── vendor/                  # Composer packages (Rector, PHPStan)
-```
-
----
-
-## Pola Kerentanan yang Diprioritaskan
-
-Pipeline deteksi kerentanan sesuai OWASP Top 10:
-
-| Priority | Jenis | Solusi |
-|----------|-------|--------|
-| 1 | SQL Injection | Prepared statements |
-| 2 | XSS | htmlspecialchars() |
-| 3 | Deprecated Functions | Modern API |
-| 4 | Hardcoded Credentials | Environment variables |
-| 5 | Path Traversal | Input validation |
-| 6 | Weak Cryptography | password_hash(), bcrypt |
-| 7 | No Input Validation | Filter & sanitize |
-| 8 | Missing Authentication | Auth checks |
-
----
-
-## Reproducibility — Local Semgrep Rulesets
-
-Secara default, Semgrep mengunduh ruleset `p/php` dan `p/owasp-top-ten` dari server
-Semgrep saat runtime. Jika Semgrep memperbarui ruleset tersebut di sisi server, hasil
-scan bisa berbeda antar run — ini mengurangi reproducibility penelitian.
-
-**Untuk mempin ruleset agar hasil scan konsisten:**
-
-```bash
-# 1. Buat folder rules/ di root project
-mkdir rules
-
-# Unix / macOS / Git Bash:
-semgrep --config p/php --dump-rules > rules/php.yaml
-semgrep --config p/owasp-top-ten --dump-rules > rules/owasp-top-ten.yaml
-
-# Windows PowerShell:
-semgrep --config p/php --dump-rules | Out-File -Encoding utf8 rules/php.yaml
-semgrep --config p/owasp-top-ten --dump-rules | Out-File -Encoding utf8 rules/owasp-top-ten.yaml
-```
-
-Setelah `rules/` terisi, scanner otomatis mendeteksinya dan menggunakan file lokal —
-**tidak perlu ubah kode apapun**. Panel output akan menampilkan `(local (pinned))`
-sebagai konfirmasi.
-
-Jika `rules/` tidak ada, scanner tetap berjalan dengan ruleset online sambil menampilkan
-peringatan di console.
-
-> **Catatan untuk skripsi:** Commit file `rules/*.yaml` ke repository agar eksperimen
-> dapat direproduksi oleh reviewer dengan ruleset yang identik.
-
----
-
-## Troubleshooting & FAQ
-
-**Q: Ollama tidak bisa terhubung**
-A: Jalankan `ollama serve` di terminal lain terlebih dahulu
-
-**Q: Output folder kosong**
-A: Cek Rector dengan: `vendor/rector/rector/bin/rector --version`
-
-**Q: Report JSON kosong atau error**
-A: Gunakan `--verbose` untuk debug:
-```bash
-python pipeline/main.py --input tests/sample_php74 --verbose
-```
-
-**Q: Non-ASCII characters crash**
-A: Windows CP1252 issue - sudah diperbaiki dengan ASCII equivalents
+| Prioritas | Jenis | Penanganan |
+|---|---|---|
+| 1 | SQL Injection (`mysql_*` tanpa prepared statements) | Rector + AI patch |
+| 2 | XSS (output tanpa `htmlspecialchars`) | AI recommendation |
+| 3 | Fungsi deprecated PHP 7.x | Rector auto-fix |
+| 4 | Hardcoded credentials | AI recommendation |
+| 5 | Path traversal | AI recommendation |
+| 6 | Weak cryptography (`md5`/`sha1` untuk password) | AI recommendation |
 
 ---
 
 ## Kontrol ISO/IEC 27001:2022
 
-Pipeline memetakan ke 5 kontrol utama:
-
-| Kontrol | Deskripsi |
-|---------|-----------|
-| A.8.25 | Secure Development Lifecycle |
-| A.8.26 | Application Security Requirements |
-| A.8.28 | Secure Coding |
-| A.8.29 | Security Testing in Development |
-| A.5.17 | Authentication Information |
+| Kontrol | Deskripsi | Ditangani Oleh |
+|---|---|---|
+| A.8.25 | Secure Development Lifecycle | Rector (CONVERT step) |
+| A.8.26 | Application Security Requirements | Semgrep (SCAN steps) |
+| A.8.28 | Secure Coding | AI REVIEW step |
+| A.8.29 | Security Testing in Development | PHPStan + LLM quality check |
+| A.8.24 | Use of Cryptography | Semgrep (weak crypto rules) |
+| A.5.17 | Authentication Information | Semgrep (hardcoded creds rules) |
 
 ---
 
-## Referensi Eksternal
+## Reproducibility — Pinned Semgrep Rulesets
 
-- DeepSeek Coder: https://ollama.com/library/deepseek-coder
+Semgrep mengunduh ruleset dari server saat runtime secara default, yang dapat mengubah hasil antar run. Untuk hasil yang konsisten dan dapat direproduksi:
+
+```powershell
+# Windows PowerShell
+mkdir rules
+semgrep --config p/php --dump-rules | Out-File -Encoding utf8 rules/php.yaml
+semgrep --config p/owasp-top-ten --dump-rules | Out-File -Encoding utf8 rules/owasp-top-ten.yaml
+```
+
+Setelah folder `rules/` terisi, scanner otomatis menggunakannya (ditandai `(local (pinned))` di output). Commit file `rules/*.yaml` agar eksperimen dapat direproduksi oleh reviewer.
+
+---
+
+## Troubleshooting
+
+| Masalah | Solusi |
+|---|---|
+| Ollama tidak konek | Jalankan `ollama serve` di terminal terpisah |
+| Folder `output/` kosong | Cek Rector: `vendor/rector/rector/bin/rector --version` |
+| Report JSON tidak muncul | Gunakan `--verbose` untuk debug |
+| Error karakter non-ASCII di Windows | Sudah diperbaiki — semua karakter non-ASCII diganti ASCII equivalents |
+| Model LLM tidak tersedia | Jalankan `ollama pull <model-name>` terlebih dahulu |
+
+---
+
+## Batasan Penelitian
+
+Yang **dikerjakan**:
+- Static analysis saja (bukan dynamic/active testing)
+- Proof of concept, bukan production-ready tool
+- Studi kasus aplikasi web PHP CodeIgniter 3.x dari FT UGM
+
+Yang **tidak dikerjakan**:
+- Fine-tuning model AI (hanya prompt engineering)
+- Perubahan arsitektur aplikasi studi kasus
+- Integrasi SSO / autentikasi UGM
+- Pengujian di sistem production UGM
+
+---
+
+## Referensi
+
 - Rector: https://getrector.com/documentation
-- Semgrep: https://semgrep.dev/p/php
+- Semgrep PHP rules: https://semgrep.dev/p/php
 - PHPStan: https://phpstan.org/
-- ISO 27001:2022: https://www.iso.org/standard/27001
+- Ollama: https://ollama.com
+- ISO/IEC 27001:2022: https://www.iso.org/standard/27001
 - OWASP Top 10: https://owasp.org/www-project-top-ten/
 
 ---
 
 ## Lisensi & Disclaimer
 
-Proyek ini adalah **Proof of Concept** untuk keperluan akademis dan penelitian.
-
-**Tidak untuk production**. Semua tools dan recommendations harus diverifikasi oleh human expert sebelum diterapkan.
+Proyek ini adalah **Proof of Concept** untuk keperluan akademis. Tidak untuk production. Semua rekomendasi AI harus diverifikasi oleh human expert sebelum diterapkan ke sistem nyata.
 
 ---
 
-**Muhammad Farrel Akbar** - Skripsi Magister, DTI UGM (2024-2026)
-
-**Last Updated**: April 22, 2026 | **Status**: Active Research
-
-**Questions?** Baca CLAUDE.md untuk konteks project lebih detail.
+**Muhammad Farrel Akbar** | Skripsi S1 | FT UGM | 2024–2026

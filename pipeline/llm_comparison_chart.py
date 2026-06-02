@@ -267,11 +267,11 @@ def _chart_inference_time(models: list[str], extracted: dict, reports_dir: Path,
 def _short_model(name: str) -> str:
     """Shorten model name for table cell (multiline, fits narrow column)."""
     mapping = {
-        "deepseek-coder": "DeepSeek\nCoder 6.7b",
-        "qwen2.5-coder":  "Qwen2.5\nCoder 7b",
-        "codellama":      "CodeLlama\n7b",
-        "mistral":        "Mistral\n7b",
-        "llama3.1":       "Llama 3.1\n8b",
+        "deepseek-coder": "DeepSeek Coder 6.7b",
+        "qwen2.5-coder":  "Qwen2.5 Coder 7b",
+        "codellama":      "CodeLlama 7b",
+        "mistral":        "Mistral 7b",
+        "llama3.1":       "Llama 3.1 8b",
     }
     base = name.split(":")[0]
     return mapping.get(base, name)
@@ -282,13 +282,12 @@ def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
     """Tabel statistik confidence: mean, std, min, max per model."""
     plt.rcParams.update(_RCPARAMS)
 
-    # Narrower figure: 7.5 in wide fits A4 text block comfortably at 150 dpi.
-    fig, ax = plt.subplots(figsize=(7.5, 3.0))
+    fig, ax = plt.subplots(figsize=(8.5, 3.0))
     fig.patch.set_facecolor("white")
     ax.axis("off")
 
     col_labels = ["Model", "Mean", "Std Dev", "Min", "Max",
-                  "Fmt OK", "Avg Time\n(s)"]
+                  "Fmt OK", "Avg Time (s)"]
     rows = []
     for m in models:
         conf = extracted[m]["conf_runs"]
@@ -320,11 +319,11 @@ def _chart_stats_table(models: list[str], extracted: dict, reports_dir: Path,
         loc="center",
     )
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(10)
-    tbl.scale(1.0, 1.9)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 1.6)
 
     # Explicit column widths: model col wider, numeric cols narrower.
-    col_widths = [0.22, 0.11, 0.11, 0.11, 0.11, 0.11, 0.13]
+    col_widths = [0.24, 0.11, 0.11, 0.10, 0.10, 0.11, 0.13]
     for col_idx, w in enumerate(col_widths):
         for row_idx in range(len(rows) + 1):
             tbl[row_idx, col_idx].set_width(w)

@@ -54,11 +54,11 @@ def _short(name: str) -> str:
 
 def _short_model(name: str) -> str:
     mapping = {
-        "deepseek-coder": "DeepSeek\nCoder 6.7b",
-        "qwen2.5-coder":  "Qwen2.5\nCoder 7b",
-        "codellama":      "CodeLlama\n7b",
-        "mistral":        "Mistral\n7b",
-        "llama3.1":       "Llama 3.1\n8b",
+        "deepseek-coder": "DeepSeek Coder 6.7b",
+        "qwen2.5-coder":  "Qwen2.5 Coder 7b",
+        "codellama":      "CodeLlama 7b",
+        "mistral":        "Mistral 7b",
+        "llama3.1":       "Llama 3.1 8b",
     }
     return mapping.get(name.split(":")[0], name)
 
@@ -208,11 +208,11 @@ def chart_inference_time(models: list[str], extracted: dict, source: str) -> Non
 
 def chart_stats_table(models: list[str], extracted: dict, source: str) -> None:
     plt.rcParams.update(_RCPARAMS)
-    fig, ax = plt.subplots(figsize=(7.5, 3.0))
+    fig, ax = plt.subplots(figsize=(8.5, 3.0))
     fig.patch.set_facecolor("white")
     ax.axis("off")
 
-    col_labels = ["Model", "Mean", "Std Dev", "Min", "Max", "Fmt OK", "Avg Time\n(s)"]
+    col_labels = ["Model", "Mean", "Std Dev", "Min", "Max", "Fmt OK", "Avg Time (s)"]
     rows = []
     for m in models:
         conf = extracted[m]["conf_runs"]
@@ -235,10 +235,10 @@ def chart_stats_table(models: list[str], extracted: dict, source: str) -> None:
     tbl = ax.table(cellText=rows, colLabels=col_labels,
                    cellLoc="center", loc="center")
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(10)
-    tbl.scale(1.0, 1.9)
+    tbl.set_fontsize(9)
+    tbl.scale(1.0, 1.6)
 
-    col_widths = [0.22, 0.11, 0.11, 0.11, 0.11, 0.11, 0.13]
+    col_widths = [0.24, 0.11, 0.11, 0.10, 0.10, 0.11, 0.13]
     for col_idx, w in enumerate(col_widths):
         for row_idx in range(len(rows) + 1):
             tbl[row_idx, col_idx].set_width(w)
