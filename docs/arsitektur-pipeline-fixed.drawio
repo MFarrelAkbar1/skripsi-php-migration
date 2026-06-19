@@ -1,0 +1,170 @@
+<mxGraphModel dx="1270" dy="641" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="850" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;" value="Arsitektur Pipeline -- main.py (Orkestrator, Step 1/6 .. 6/6)" vertex="1">
+      <mxGeometry height="30" width="700" x="100" y="15" as="geometry" />
+    </mxCell>
+
+    <mxCell id="main-border" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#888780;strokeWidth=2;dashed=1;dashPattern=8 4;arcSize=5;fontSize=13;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontColor=#888780;" value="Alur utama berurutan (main.py)" vertex="1">
+      <mxGeometry height="175" width="940" x="160" y="75" as="geometry" />
+    </mxCell>
+
+    <!-- input -->
+    <mxCell id="input" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;fontSize=13;arcSize=15;fontColor=#333333;" value="&lt;b&gt;input/&lt;/b&gt;&lt;br&gt;File PHP 5.x / 7.x&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;(+ composer.json)&lt;/font&gt;" vertex="1">
+      <mxGeometry height="70" width="130" x="10" y="135" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr1" edge="1" parent="1" source="input" target="scanner-pre" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- scanner pre-scan : Step 1 -->
+    <mxCell id="scanner-pre" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0F6E56;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;scanner.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0F6E56&quot;&gt;Step 1/6 -- Pre-Scan&lt;/font&gt;" vertex="1">
+      <mxGeometry height="140" width="160" x="170" y="90" as="geometry" />
+    </mxCell>
+    <mxCell id="scanner-pre-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#0F6E56;spacingLeft=5;" value="• Target: input/&lt;br&gt;• 7 jenis kerentanan&lt;br&gt;• Ruleset: p/php +&lt;br&gt;&amp;nbsp; p/owasp-top-ten&lt;br&gt;• Output: pre_scan" vertex="1">
+      <mxGeometry height="95" width="150" x="175" y="145" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr2" edge="1" parent="1" source="scanner-pre" target="converter" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- converter : Step 2 -->
+    <mxCell id="converter" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#185FA5;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;converter.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#185FA5&quot;&gt;Step 2/6&lt;/font&gt;" vertex="1">
+      <mxGeometry height="140" width="160" x="360" y="90" as="geometry" />
+    </mxCell>
+    <mxCell id="converter-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#185FA5;spacingLeft=5;" value="• Rector (AST-based)&lt;br&gt;• PHP 5.x/7.x -&amp;gt; 8.3&lt;br&gt;• 13 level ruleset&lt;br&gt;&amp;nbsp; kumulatif&lt;br&gt;• input/ -&amp;gt; output/" vertex="1">
+      <mxGeometry height="95" width="150" x="365" y="145" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr3" edge="1" parent="1" source="converter" target="scanner-post" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- scanner post-scan : Step 3 -->
+    <mxCell id="scanner-post" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0F6E56;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;scanner.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0F6E56&quot;&gt;Step 3/6 -- Post-Scan&lt;/font&gt;" vertex="1">
+      <mxGeometry height="140" width="160" x="550" y="90" as="geometry" />
+    </mxCell>
+    <mxCell id="scanner-post-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#0F6E56;spacingLeft=5;" value="• Target: output/&lt;br&gt;• Scan ulang kode&lt;br&gt;&amp;nbsp; hasil konversi&lt;br&gt;• Output: post_scan&lt;br&gt;&amp;nbsp; (untuk tabel ΔF,&lt;br&gt;&amp;nbsp; tidak masuk iso_mapper)" vertex="1">
+      <mxGeometry height="105" width="150" x="555" y="145" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr4" edge="1" parent="1" source="scanner-post" target="analyzer" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- analyzer : Step 4 -->
+    <mxCell id="analyzer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#185FA5;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;analyzer.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#185FA5&quot;&gt;Step 4/6&lt;/font&gt;" vertex="1">
+      <mxGeometry height="140" width="160" x="740" y="90" as="geometry" />
+    </mxCell>
+    <mxCell id="analyzer-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#185FA5;spacingLeft=5;" value="• PHPStan Level 5&lt;br&gt;• Target: output/&lt;br&gt;• CI3 noise filter&lt;br&gt;&amp;nbsp; (56 pola)&lt;br&gt;• Output: analysis.errors" vertex="1">
+      <mxGeometry height="95" width="150" x="745" y="145" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr5" edge="1" parent="1" source="analyzer" target="iso_mapper" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- iso_mapper : Step 6 -->
+    <mxCell id="iso_mapper" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0F6E56;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;iso_mapper.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#0F6E56&quot;&gt;Step 6/6&lt;/font&gt;" vertex="1">
+      <mxGeometry height="140" width="170" x="930" y="90" as="geometry" />
+    </mxCell>
+    <mxCell id="iso-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#0F6E56;spacingLeft=5;" value="• 6 kontrol ISO/IEC&lt;br&gt;&amp;nbsp; 27001:2022&lt;br&gt;• Rule-based,&lt;br&gt;&amp;nbsp; deterministik&lt;br&gt;• Input: pre_scan +&lt;br&gt;&amp;nbsp; PHPStan + AI recs" vertex="1">
+      <mxGeometry height="95" width="160" x="935" y="145" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr6" edge="1" parent="1" source="iso_mapper" target="output" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#555555;strokeWidth=2;fontSize=13;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- output -->
+    <mxCell id="output" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;fontSize=13;arcSize=15;fontColor=#333333;" value="&lt;b&gt;Laporan JSON&lt;/b&gt;&lt;br&gt;iso_report_*.json&lt;br&gt;pipeline_result_*.json" vertex="1">
+      <mxGeometry height="70" width="150" x="1140" y="135" as="geometry" />
+    </mxCell>
+
+    <!-- direct dependency: pre_scan feeds iso_mapper directly (not via analyzer) -->
+    <mxCell id="arr-pre-iso" edge="1" parent="1" source="scanner-pre" target="iso_mapper" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#0F6E56;strokeWidth=2;dashed=1;dashPattern=6 3;fontSize=12;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="250" y="50" />
+          <mxPoint x="1015" y="50" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="arr-pre-iso-label" connectable="0" parent="1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#0F6E56;" value="pre_scan.findings (scan_result langsung, bukan lewat analyzer)" vertex="1">
+      <mxGeometry relative="1" x="0" as="geometry">
+        <mxPoint x="0" y="-5" as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <!-- AI engine : Step 5 -->
+    <mxCell id="ai_engine" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f0ff;strokeColor=#534AB7;strokeWidth=3;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;ai_engine.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#534AB7&quot;&gt;Step 5/6 (AI)&lt;/font&gt;" vertex="1">
+      <mxGeometry height="120" width="200" x="380" y="320" as="geometry" />
+    </mxCell>
+    <mxCell id="ai-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#534AB7;spacingLeft=5;" value="• Qwen2.5-Coder 7b&lt;br&gt;&amp;nbsp; (Ollama, lokal)&lt;br&gt;• Zero-shot prompt&lt;br&gt;• Rekomendasi perbaikan&lt;br&gt;&amp;nbsp; kode (AIRecommendation)" vertex="1">
+      <mxGeometry height="80" width="190" x="385" y="375" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr-ai-in" edge="1" parent="1" source="scanner-pre" target="ai_engine" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#534AB7;strokeWidth=2;dashed=1;dashPattern=6 3;fontSize=12;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-ai-in-label" connectable="0" parent="1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#534AB7;" value="pre-scan findings prioritas &amp;lt;= 3&lt;br&gt;(SQLi, XSS, Deprecated)" vertex="1">
+      <mxGeometry relative="1" x="0" as="geometry">
+        <mxPoint x="-30" y="0" as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <mxCell id="arr-ai-iso" edge="1" parent="1" source="ai_engine" target="iso_mapper" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#534AB7;strokeWidth=2;dashed=1;dashPattern=6 3;fontSize=12;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0.3;entryY=1;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-ai-iso-label" connectable="0" parent="1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#534AB7;" value="ai_recommendations" vertex="1">
+      <mxGeometry relative="1" x="0" as="geometry">
+        <mxPoint x="40" y="0" as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <!-- Composer analyzer : Step 2b -->
+    <mxCell id="composer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffde7;strokeColor=#BA7517;strokeWidth=2;dashed=1;dashPattern=8 4;fontSize=13;arcSize=10;align=center;verticalAlign=top;spacingTop=8;" value="&lt;b&gt;composer_analyzer.py&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#BA7517&quot;&gt;Step 2b (opsional)&lt;/font&gt;" vertex="1">
+      <mxGeometry height="120" width="220" x="630" y="320" as="geometry" />
+    </mxCell>
+    <mxCell id="composer-detail" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=12;fontColor=#BA7517;spacingLeft=5;" value="• Baca composer.json&lt;br&gt;&amp;nbsp; dari input/&lt;br&gt;• Cek kompatibilitas&lt;br&gt;&amp;nbsp; dependency vs target PHP&lt;br&gt;• Output: SAFE / MANUAL REVIEW" vertex="1">
+      <mxGeometry height="80" width="210" x="635" y="375" as="geometry" />
+    </mxCell>
+
+    <mxCell id="arr-input-comp" edge="1" parent="1" source="input" target="composer" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#BA7517;strokeWidth=1.5;dashed=1;dashPattern=8 4;fontSize=12;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="75" y="380" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="arr-input-comp-label" connectable="0" parent="1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#BA7517;" value="composer.json (input/)" vertex="1">
+      <mxGeometry relative="1" x="0" as="geometry">
+        <mxPoint x="0" y="-12" as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <!-- composer result goes only to pipeline_result, NOT iso_mapper -->
+    <mxCell id="arr-comp-out" edge="1" parent="1" source="composer" target="output" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#BA7517;strokeWidth=1.5;dashed=1;dashPattern=8 4;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1215" y="380" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="arr-comp-out-label" connectable="0" parent="1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#BA7517;" value="composer_analysis&lt;br&gt;(pipeline_result saja)" vertex="1">
+      <mxGeometry relative="1" x="0" as="geometry">
+        <mxPoint x="0" y="0" as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <!-- legend -->
+    <mxCell id="legend-border" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#cccccc;strokeWidth=1;arcSize=5;fontSize=11;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontColor=#666666;" value="Catatan:&lt;br&gt;-- garis solid abu-abu = urutan eksekusi pipeline (sequential)&lt;br&gt;-- garis putus-putus berwarna = aliran data (dependency) antar modul&lt;br&gt;-- post_scan (Step 3) dipakai untuk tabel perbandingan ΔF di pipeline_result, TIDAK menjadi input iso_mapper" vertex="1">
+      <mxGeometry height="70" width="940" x="160" y="470" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>

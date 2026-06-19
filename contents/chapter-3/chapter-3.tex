@@ -1,0 +1,678 @@
+\chapter{Metodologi Penelitian}
+
+Bab ini menjelaskan langkah-langkah yang diambil dalam penelitian ini untuk mencapai tujuan yang ditetapkan dalam Subbab~\ref{sec:tujuan-penelitian}. Cakupannya meliputi alat dan bahan yang digunakan, metode penelitian, arsitektur sistem, alur data \textit{pipeline}, desain \textit{prompt} LLM, pemetaan kontrol ISO/IEC 27001:2022, rancangan eksperimen komparasi model, dan metode evaluasi.
+
+\section{Alat dan Bahan Penelitian}
+
+\subsection{Perangkat Keras}
+
+Seluruh proses pengembangan dan pengujian dalam penelitian ini dilakukan pada satu unit laptop HP Victus 16-r0xxx dengan spesifikasi sebagai berikut:
+
+\begin{itemize}
+
+    \item Sistem operasi: Windows 11 Home Single Language 64-bit (Build 26200)
+
+    \item Prosesor: Intel Core i7-13700HX, 24 inti logis, kecepatan dasar 2,1 GHz
+
+    \item Memori: 16.384 MB RAM
+
+    \item GPU diskrit: NVIDIA GeForce RTX 4060 dengan VRAM 8 GB
+
+    \item GPU terintegrasi: Intel UHD Graphics
+
+    \item Penyimpanan: NVMe SSD 1 TB
+
+\end{itemize}
+Kode sumber FT UGM dan DTI UGM bersifat rahasia dan tidak 
+boleh dikirimkan ke layanan AI eksternal, sehingga seluruh 
+komponen AI dalam \textit{pipeline} ini dijalankan secara 
+lokal melalui Ollama. RTX 4060 dengan VRAM 8 GB memungkinkan 
+kelima model yang dievaluasi (masing-masing 6--8 miliar 
+parameter) dimuat sepenuhnya ke GPU pada kuantisasi Q4\_0, 
+sehingga model dapat berjalan tanpa mengirimkan data ke 
+luar lingkungan lokal.
+
+\subsection{Perangkat Lunak}
+
+\begin{itemize}
+
+    \item \textbf{Python 3.11+}: Bahasa pemrograman utama untuk 
+    membangun \textit{pipeline} yang menghubungkan semua modul. 
+    Dipilih karena kemudahannya memanggil perintah eksternal via 
+    \textit{subprocess} dan ketersediaan pustaka \texttt{requests} 
+    untuk berkomunikasi dengan API Ollama.
+
+    \item \textbf{Rector}: Alat transformasi kode berbasis AST 
+    untuk PHP, dikonfigurasi secara dinamis sesuai versi target 
+    yang dipilih.
+
+    \item \textbf{Semgrep}: Alat analisis statis untuk pemindaian 
+    kerentanan. Dijalankan dengan \textit{ruleset} \texttt{p/php} 
+    dan \texttt{p/owasp-top-ten}.
+
+    \item \textbf{PHPStan}: Alat analisis statis untuk validasi 
+    tipe dan kompatibilitas kode PHP, dijalankan pada level 5.
+
+    \item \textbf{Ollama}: \textit{Platform} untuk menjalankan LLM 
+    secara lokal, diakses via API REST di \texttt{localhost:11434}. 
+    Justifikasi pemilihan Ollama dibandingkan alternatif LM Studio 
+    dan llama.cpp dibahas pada Subbab~\ref{subsec:justifikasi-ollama}. 
+    Secara teknis, Ollama memuat bobot model dalam format GGUF ke dalam VRAM GPU 
+    menggunakan \textit{backend} llama.cpp. Pada RTX 4060 dengan 
+    VRAM 8 GB, kelima model yang diuji menghasilkan rata-rata 
+    20--40 token per detik pada kuantisasi Q4\_0. Ollama menyimpan 
+    model yang sudah dimuat di VRAM selama sesi aktif sehingga 
+    latensi \textit{cold start} hanya terjadi sekali per sesi.
+
+    \item \textbf{PHP 8.4.1}: Interpreter PHP untuk validasi 
+    sintaks menggunakan \texttt{php -l}.
+
+    \item \textbf{Composer}: Manajer dependensi PHP untuk 
+    instalasi Rector dan PHPStan.
+
+    \item \textbf{Visual Studio Code}: Sebagai IDE utama selama pengembangan.
+
+\end{itemize}
+\subsection{Model LLM yang Dievaluasi}
+
+Lima model LLM \textit{open source} dievaluasi dalam penelitian 
+ini: DeepSeek Coder 6.7b, Qwen2.5-Coder 7b, CodeLlama 7b, 
+Mistral 7b, dan Llama 3.1 8b. Kelima model dijalankan pada 
+kuantisasi Q4\_0 agar dapat dimuat ke dalam VRAM 8 GB. 
+Rincian spesifikasi dan literatur pendukung masing-masing model 
+telah diuraikan pada Subbab~\ref{subsec:model-llm}.
+\subsection{Bahan Penelitian}
+
+\begin{itemize}
+
+    \item \textbf{Dokumen ISO/IEC 27001:2022}: Acuan utama untuk pemetaan kontrol keamanan.
+
+    \item \textbf{Kode sumber PHP dari FT UGM}: Kumpulan \textit{file} PHP 
+dari aplikasi \textit{Dashboard} TCK berbasis CodeIgniter 3.x dengan 
+PHP 7.4.9. Bersifat rahasia dan hanya digunakan untuk analisis statis 
+tanpa akses ke basis data produksi.
+
+\item \textbf{Kode sumber PHP dari DTI UGM}: Kumpulan \textit{file} PHP 
+dari aplikasi \textit{Computer-Based Test} (CBT) berbasis CodeIgniter 3.x 
+dengan persyaratan PHP $\geq$ 7.0. Bersifat rahasia dengan perlakuan 
+privasi data yang sama dengan dataset FT UGM.
+    \item \textbf{Dokumentasi resmi PHP}: Referensi untuk memverifikasi kebenaran konversi Rector.
+
+    \item \textbf{Registri aturan Semgrep}: Aturan publik \texttt{p/php} dan \texttt{p/owasp-top-ten} untuk pemindaian keamanan.
+
+\end{itemize}
+
+\section{Metode Penelitian}
+
+Penelitian ini menggunakan metodologi R\&D dengan model 
+prototipe sebagaimana diuraikan pada 
+Subbab~\ref{subsec:model-prototipe}.
+
+\textit{Pipeline} otomasi yang dirancang dalam penelitian ini 
+merupakan wujud konkret dari manajemen perangkat lunak dalam 
+skala basis kode nyata: Rector menangani pembaruan versi PHP 
+secara sistematis, sementara komponen AI Engine berbasis LLM 
+merekomendasikan perbaikan kerentanan yang teridentifikasi. 
+Kedua fungsi ini berjalan dalam satu alur terpadu yang dapat 
+diterapkan ulang pada basis kode lain.
+Gambar \ref{fig:alur-penelitian} menunjukkan alur penelitian yang terdiri dari tujuh tahapan.
+
+\begin{figure}[htbp]
+
+    \centering
+
+    \includegraphics[width=0.8\textwidth]{contents/chapter-3/alur-penelitian2.png}
+
+    \caption{Alur penelitian dengan model prototipe}
+
+    \label{fig:alur-penelitian}
+
+\end{figure}
+
+\begin{enumerate}
+
+    \item \begin{sloppypar}\textbf{Tinjauan pustaka}: Mempelajari permasalahan migrasi PHP lama, persyaratan ISO/IEC 27001:2022, kemampuan model LLM \textit{open source}, dan alat analisis statis yang relevan. Koordinasi awal dengan FT UGM dan DTI UGM dilakukan pada tahap ini.\end{sloppypar}
+
+    \item \textbf{Analisis persyaratan}: Mendefinisikan persyaratan fungsional dan non-fungsional berdasarkan hasil tinjauan pustaka dan koordinasi dengan FT UGM dan DTI UGM, termasuk menentukan kontrol ISO yang dicakup dan persyaratan privasi data.
+
+    \item \textbf{Desain sistem}: Menentukan struktur 
+enam modul \textit{pipeline}, alur data antar modul, 
+dan cara setiap modul saling berkomunikasi, termasuk 
+merancang desain eksperimen komparasi LLM.
+
+    \item \textbf{Implementasi}: Membangun enam modul fungsional Python satu per satu, 
+dikoordinasikan oleh \texttt{main.py} sebagai orkestrator. Setiap modul diuji secara terpisah sebelum diintegrasikan.
+
+    \item \textbf{Pengujian}: Menguji prototipe menggunakan 
+\textit{file} PHP buatan sendiri dan potongan kode 
+representatif untuk memverifikasi setiap modul sebelum 
+dijalankan pada dataset studi kasus. Jika ditemukan 
+masalah, proses kembali ke tahap implementasi (iterasi).
+    \item \textbf{Validasi studi kasus}: Pengujian akhir menggunakan kode sumber FT UGM dan DTI UGM setelah prototipe stabil.
+
+    \item \textbf{Evaluasi dan dokumentasi}: Menganalisis hasil dan menyusun laporan penelitian.
+
+\end{enumerate}
+
+\section{Arsitektur Sistem}
+
+Sistem terdiri dari enam modul fungsional Python yang
+dikoordinasikan oleh \texttt{main.py} sebagai orkestrator
+yang masing-masing menangani satu langkah dalam proses konversi dan analisis keamanan. 
+Arsitektur modular memungkinkan setiap bagian diuji, diperbaiki, atau diganti secara independen.
+
+Gambar \ref{fig:arsitektur-sistem} menunjukkan hubungan antar modul.
+\newpage
+\begin{figure}[htbp]
+
+    \centering
+
+    \includegraphics[width=0.9\textwidth]{contents/chapter-3/arsitektur-sistem.png}
+
+    \caption{Arsitektur sistem \textit{pipeline} dengan enam modul fungsional dan satu orkestrator}
+
+    \label{fig:arsitektur-sistem}
+
+\end{figure}
+
+\subsection{Scanner (scanner.py)}
+
+Scanner merupakan modul pertama yang dieksekusi dalam \textit{pipeline}. Modul ini menjalankan Semgrep dengan \textit{ruleset} \texttt{p/php} dan \texttt{p/owasp-top-ten} pada direktori \texttt{input/} sebelum konversi (\textit{pre-scan}), dan pada direktori \texttt{output/} setelah konversi (\textit{post-scan}) untuk mengukur perubahan postur keamanan melalui $\Delta F$. Fungsi \texttt{\_classify()} di dalam modul ini juga menugaskan jenis kerentanan, prioritas, dan kontrol ISO awal untuk setiap temuan, sebagaimana dijelaskan pada Subbab~\ref{sec:iso-mapping-design}.
+
+\begin{itemize}
+    \item \textbf{Input}: direktori berisi \textit{file} PHP (\texttt{input/} untuk \textit{pre-scan}, \texttt{output/} untuk \textit{post-scan}).
+    \item \textbf{Output}: daftar temuan kerentanan terstruktur (\texttt{rule\_id}, nama \textit{file}, baris, deskripsi, jenis kerentanan, prioritas, kontrol ISO awal) sebagai objek Python \textit{in-memory}, diteruskan ke AI Engine dan ISO Mapper.
+\end{itemize}
+
+\subsection{Converter (converter.py)}
+
+\begin{sloppypar}
+
+Modul ini menggunakan Rector untuk transformasi kode PHP berbasis AST. Argumen CLI \texttt{--target-php} menentukan versi target; nilai yang diterima adalah \texttt{"7.4"}, \texttt{"8.0"}, \texttt{"8.1"}, \texttt{"8.2"}, atau \texttt{"8.3"}. Sebelum Rector dijalankan, seluruh \textit{file} PHP dari \texttt{input/} disalin dahulu ke \texttt{output/}. Rector kemudian memodifikasi \textit{file} di \texttt{output/} langsung tanpa membuat salinan baru. \textit{File} yang gagal dikonversi tetap ada di \texttt{output/} sebagai salinan kode asli dan statusnya dicatat \texttt{FAILED} di laporan; direktori \texttt{input/} tidak dimodifikasi sama sekali. Konfigurasi Rector dibuat sebagai \textit{tempfile} saat \textit{runtime} dan dihapus otomatis setelahnya.
+
+\end{sloppypar}
+
+\begin{itemize}
+    \item \textbf{Input}: direktori \texttt{input/} berisi \textit{file} PHP sumber dan versi target \texttt{--target-php}.
+    \item \textbf{Output}: direktori \texttt{output/} berisi \textit{file} PHP hasil transformasi (atau salinan asli untuk \textit{file} yang gagal/dilewati), beserta status per \textit{file} (\texttt{SUCCESS}, \texttt{SKIPPED}, atau \texttt{FAILED}) yang diteruskan ke laporan akhir.
+\end{itemize}
+\begin{table}[htbp]
+\caption{Pemetaan argumen \texttt{--target-php} ke konfigurasi Rector}
+\vspace{0.5em}
+\centering
+\label{tab:rector-levelset}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{|l|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}X|}
+\hline
+\textbf{Nilai \texttt{--target-php}} & \textbf{Chain \textit{LevelSetList} yang diterapkan} & \textbf{Cakupan \textit{rule} kumulatif} \\
+\hline \hline
+
+\texttt{7.4} & \texttt{UP\_TO\_PHP\_53} s.d.\ \texttt{UP\_TO\_PHP\_74} & PHP 5.3, 5.4, 5.5, 5.6, 7.0, 7.1, 7.2, 7.3, 7.4 \\
+\hline
+
+\texttt{8.0} & \texttt{UP\_TO\_PHP\_53} s.d.\ \texttt{UP\_TO\_PHP\_80} & Semua \textit{rule} 7.4 + PHP 8.0 \\
+\hline
+
+\texttt{8.1} & \texttt{UP\_TO\_PHP\_53} s.d.\ \texttt{UP\_TO\_PHP\_81} & Semua \textit{rule} 8.0 + PHP 8.1 \\
+\hline
+
+\texttt{8.2} & \texttt{UP\_TO\_PHP\_53} s.d.\ \texttt{UP\_TO\_PHP\_82} & Semua \textit{rule} 8.1 + PHP 8.2 \\
+\hline
+
+\texttt{8.3} & \texttt{UP\_TO\_PHP\_53} s.d.\ \texttt{UP\_TO\_PHP\_83} & Semua \textit{rule} 8.2 + PHP 8.3 \\
+\hline
+
+\end{tabularx}
+\end{table}
+
+Target PHP 8.3 digunakan dalam penelitian ini. Selain 
+\textit{level sets} di atas, \textit{pipeline} juga 
+menambahkan \texttt{SetList::CODE\_QUALITY}, 
+\texttt{DEAD\_CODE}, \texttt{EARLY\_RETURN}, dan 
+\texttt{TYPE\_DECLARATION} untuk semua nilai target.
+Mengingat \textit{ruleset} yang digunakan bersifat kumulatif, kode PHP 5.x dapat diproses langsung menuju PHP 8.3 dalam satu langkah. 
+Jenis-jenis transformasi yang ditangani Rector dan
+keterbatasan Rector terhadap pola semantik seperti \texttt{mysql\_*()}
+telah diuraikan pada Subbab~\ref{subsec:rector}.
+\subsection{Analyzer (analyzer.py)}
+
+Setelah konversi, Analyzer menjalankan PHPStan pada direktori \texttt{output/} untuk memverifikasi kompatibilitas kode dengan versi PHP target. Level 5 dipilih sebagai keseimbangan antara keketatan dan jumlah \textit{false positive} yang wajar untuk kode warisan. Setiap temuan PHPStan dikategorikan sebagai ERROR atau WARNING, lalu dikaitkan dengan kontrol ISO/IEC 27001:2022 yang relevan.
+
+\begin{itemize}
+    \item \textbf{Input}: direktori \texttt{output/} hasil konversi Rector.
+    \item \textbf{Output}: daftar temuan PHPStan (kategori \texttt{ERROR}/\texttt{WARNING}) yang masing-masing dikaitkan dengan kontrol ISO/IEC 27001:2022, diteruskan ke ISO Mapper.
+\end{itemize}
+
+
+\subsection{AI Engine (ai\_engine.py)}
+
+Modul ini menerima temuan dari Semgrep \textit{pre-scan} sebagai masukan, bukan dari PHPStan dan bukan dari \textit{post-scan}. 
+Temuan dengan prioritas 1--5 dikirim ke AI Engine: SQL Injection (prioritas 1), XSS (prioritas 2), fungsi usang (prioritas 3), 
+\textit{hardcoded credentials} (prioritas 4),
+serta \textit{path traversal} dan SSRF (prioritas 5). Temuan yang tidak terklasifikasi (prioritas 99) 
+tidak diproses. Prioritas ditentukan berdasarkan potensi dampak langsung 
+terhadap kerahasiaan dan integritas sistem serta frekuensi kemunculannya pada aplikasi PHP warisan menurut OWASP Top 10. 
+
+\begin{sloppypar}
+
+Untuk setiap temuan yang lolos filter, modul mengirimkan konteks dan potongan kode ke model LLM melalui endpoint \texttt{/api/chat} Ollama di \texttt{localhost:11434}. Jika model tidak menghasilkan blok kode PHP sama sekali, respons tetap dicatat dengan \textit{placeholder} // Manual review required dan tidak diabaikan begitu saja. Jika Ollama tidak tersedia, \textit{pipeline} tetap berjalan tanpa komponen AI. Desain \textit{prompt} yang digunakan dibahas dalam Subbab \ref{sec:prompt-design}.
+
+\end{sloppypar}
+
+\begin{itemize}
+    \item \textbf{Input}: temuan Semgrep \textit{pre-scan} dengan prioritas 1--5 beserta potongan kode sumber terkait (maksimum 2.000 karakter pertama).
+    \item \textbf{Output}: penjelasan kerentanan dalam bahasa Inggris, saran kode perbaikan PHP 8.x (atau \textit{placeholder} \texttt{// Manual review required} jika tidak ada blok kode yang berhasil diekstraksi), dan skor kepercayaan \texttt{CONFIDENCE}, diteruskan ke ISO Mapper dan laporan akhir.
+\end{itemize}
+
+\subsection{ISO Mapper (iso\_mapper.py)}
+
+Modul ini menerima semua hasil dari Scanner, Analyzer, dan AI Engine sebagai objek Python \textit{in-memory} langsung dari \texttt{main.py}, lalu memetakannya ke kontrol ISO/IEC 27001:2022 secara berbasis aturan. Tidak ada pembacaan \textit{file} JSON. Pemetaan berbasis aturan dipilih agar hasilnya deterministik dan dapat diaudit. Detail pemetaan dibahas dalam Subbab \ref{sec:iso-mapping-design}.
+
+\begin{itemize}
+    \item \textbf{Input}: objek Python \textit{in-memory} dari Scanner (temuan Semgrep \textit{pre}- dan \textit{post-scan}), Analyzer (temuan PHPStan), dan AI Engine (saran perbaikan).
+    \item \textbf{Output}: status kepatuhan (\texttt{COMPLIANT}, \texttt{PARTIAL}, atau \texttt{NON\_COMPLIANT}) untuk masing-masing dari enam kontrol ISO/IEC 27001:2022 yang dipetakan, diteruskan ke \texttt{main.py}.
+\end{itemize}
+
+\subsection{Main (main.py)}
+
+Modul \texttt{main.py} bertindak sebagai orkestrator yang mengontrol seluruh \textit{pipeline}. Menerima direktori \textit{input} dan versi PHP target sebagai argumen CLI, menjalankan keenam modul secara berurutan, dan menghasilkan laporan JSON di direktori \texttt{reports/}. Ringkasan hasil ditampilkan di konsol menggunakan pustaka Rich.
+
+\begin{itemize}
+    \item \textbf{Input}: direktori \textit{input} dan versi PHP target sebagai argumen CLI.
+    \item \textbf{Output}: laporan JSON terstruktur di direktori \texttt{reports/} yang menggabungkan hasil seluruh modul, serta ringkasan yang ditampilkan di konsol.
+\end{itemize}
+
+Contoh kerangka laporan JSON yang dihasilkan:
+
+\begin{lstlisting}[style=promptstyle]
+{
+  "overall_status": "NON_COMPLIANT",
+  "duration_seconds": 228.4,
+  "conversion": {
+    "total_files": 245,
+    "converted": 239,
+    "conversion_rate": 97.6
+  },
+  "iso_controls": {
+    "A.5.17": {"status": "COMPLIANT", "findings": 0},
+    "A.8.28": {"status": "NON_COMPLIANT", "findings": 2790}
+  },
+  "semgrep": {
+    "pre_scan_findings": 11,
+    "post_scan_findings": 11,
+    "delta_f": 0
+  }
+}
+\end{lstlisting}
+\subsection{Composer Analyzer (composer\_analyzer.py)}
+
+Modul ini membaca berkas \texttt{composer.json} pada direktori 
+\textit{root} repositori dan memeriksa kompatibilitas setiap dependensi 
+terhadap PHP 8.x menggunakan data dari Packagist. Jika berkas 
+\texttt{composer.json} tidak ditemukan, modul dilewati secara otomatis 
+tanpa menghentikan \textit{pipeline}. Setiap dependensi diklasifikasikan
+sebagai \texttt{SAFE} (versi yang dikonfigurasi mendukung PHP 8.x secara
+deklaratif) atau \texttt{MANUAL REVIEW} (kompatibilitas tidak dapat
+diverifikasi secara otomatis).
+
+\begin{itemize}
+    \item \textbf{Input}: berkas \texttt{composer.json} pada direktori \textit{root} repositori (jika tersedia).
+    \item \textbf{Output}: klasifikasi setiap dependensi (\texttt{SAFE} atau \texttt{MANUAL REVIEW}) terhadap kompatibilitas PHP 8.x, diteruskan ke laporan akhir.
+\end{itemize}
+
+\section{Alur Data Pipeline}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{contents/chapter-3/alur-data-pipeline233.png}
+    \caption{Alur data \textit{pipeline}: tahap masukan: 
+    Scanner, Converter, dan Composer Analyzer}
+    \label{fig:alur-pipeline-input}
+\end{figure}
+\textit{File} PHP ditempatkan di \texttt{input/}. Scanner 
+menjalankan Semgrep pada \texttt{input/} untuk menetapkan 
+\textit{baseline} keamanan kode asli (\textit{pre-scan}). 
+Converter menyalin semua \textit{file} ke \texttt{output/} 
+lalu menjalankan Rector dengan versi target yang ditentukan; 
+\texttt{input/} tidak dimodifikasi sama sekali. Setelah konversi, 
+Scanner menjalankan Semgrep kembali pada \texttt{output/} 
+(\textit{post-scan}) untuk mengukur perubahan postur keamanan 
+melalui nilai $\Delta F$. Composer Analyzer memeriksa 
+kompatibilitas dependensi \texttt{composer.json} terhadap 
+PHP 8.x, atau dilewati otomatis jika berkas tidak ditemukan.
+
+
+Selanjutnya, Analyzer menjalankan PHPStan level 5 pada \texttt{output/} 
+untuk memverifikasi kompatibilitas kode dengan versi PHP 
+target. Sementara itu, AI Engine mengambil temuan Semgrep prioritas 1--5
+dan mengirimkannya ke model LLM untuk analisis dan saran 
+perbaikan; modul ini dilewati otomatis jika tidak ada temuan. 
+Pada tahap akhir, ISO Mapper mengumpulkan semua temuan dari Scanner, Analyzer, 
+dan AI Engine lalu memetakannya ke enam kontrol ISO/IEC 
+27001:2022. Sebagai penutup, \texttt{main.py} menggabungkan seluruh 
+data tersebut menjadi laporan JSON dan menampilkan ringkasannya di konsol.
+
+\section{Desain Prompt LLM}
+
+\label{sec:prompt-design}
+
+Desain \textit{prompt} adalah salah satu keputusan metodologis yang paling berpengaruh terhadap kualitas respons model. \textit{Prompt} dirancang untuk memenuhi tiga tujuan: menghasilkan kode perbaikan yang valid secara sintaksis, menghasilkan skor kepercayaan yang dapat dibaca otomatis oleh \textit{pipeline}, dan dapat dijalankan secara \textit{zero-shot} tanpa contoh mengingat tidak tersedianya \textit{dataset} berlabel.
+
+\textit{Prompt} yang dijelaskan pada subbab ini adalah \textit{prompt} standar Kondisi A yang digunakan secara identik untuk semua model.
+
+\subsection{Struktur Prompt}
+
+\textit{Prompt} terdiri dari dua bagian yang dikirim melalui endpoint \texttt{/api/chat}: \textit{system message} dan \textit{user message}. 
+
+\textit{System message}:
+
+\begin{lstlisting}[style=promptstyle]
+You are a PHP security expert and migration specialist. 
+You analyze PHP code for security vulnerabilities and provide 
+secure PHP 8.x replacements. 
+Always follow output format instructions exactly as given.
+\end{lstlisting}
+\newpage
+\textit{User message} untuk setiap temuan:
+
+\begin{lstlisting}[style=promptstyle]
+
+TASK: Analyze the following PHP code for a [vulnerability_type]
+vulnerability and provide a secure PHP 8.x replacement.
+ISO/IEC 27001:2022 Controls: [relevant_controls]
+Context: File: [filename], line [line_number],
+         Semgrep rule: [rule_id], Finding: [description]
+VULNERABLE CODE:
+```php
+[code_snippet]
+```
+Respond in English:
+1. Explain the vulnerability and its security risk.
+2. Provide the corrected PHP 8.x code in a ```php code block.
+After your explanation and code fix, write exactly this on the
+last line:
+CONFIDENCE: [number between 0 and 100]
+Example last line: CONFIDENCE: 85
+\end{lstlisting}
+
+Potongan kode yang disisipkan pada \textit{placeholder} \texttt{[code\_snippet]} 
+dibatasi pada 2.000 karakter pertama dari \textit{file} sumber. Pembatasan ini 
+diterapkan untuk menjaga agar ukuran \textit{prompt} tetap dalam batas 
+\textit{context window} default Ollama dan menghindari pemotongan respons 
+akibat token yang melebihi kapasitas model. Konsekuensinya, untuk \textit{file} 
+PHP yang panjang, model hanya menerima bagian awal kode dan tidak selalu 
+memiliki konteks lengkap untuk menganalisis kerentanan secara menyeluruh. 
+Keterbatasan ini dibahas lebih lanjut dalam Subbab~\ref{sec:keterbatasan}.
+Sebagai ilustrasi, berikut contoh pengisian \textit{placeholder} di atas 
+untuk temuan SQL Injection pada \texttt{Output.php} baris 768 
+(\textit{rule}: \texttt{tainted-sql-string}, kontrol A.8.26 dan A.8.28):
+\newpage
+\begin{lstlisting}[style=promptstyle]
+TASK: Analyze the following PHP code for a SQL Injection
+vulnerability and provide a secure PHP 8.x replacement.
+ISO/IEC 27001:2022 Controls: A.8.26, A.8.28
+Context: File: Output.php, line 768,
+         Semgrep rule: tainted-sql-string,
+         Finding: $_SERVER['QUERY_STRING'] used directly in
+                  cache path construction without sanitization
+VULNERABLE CODE:
+```php
+$uri .= '?'.$_SERVER['QUERY_STRING'];
+$cache_path .= md5(
+    $CI->config->item('base_url')
+    .$CI->config->item('index_page')
+    .ltrim($uri, '/'));
+
+if ( ! @unlink($cache_path)) {
+    log_message('error',
+        'Unable to delete cache file for '.$uri);
+    return FALSE;
+}
+```
+Respond in English:
+1. Explain the vulnerability and its security risk.
+2. Provide the corrected PHP 8.x code in a ```php code block.
+After your explanation and code fix, write exactly this on the
+last line:
+CONFIDENCE: [number between 0 and 100]
+Example last line: CONFIDENCE: 85
+\end{lstlisting}
+Blok kode PHP diekstraksi dari respons model menggunakan pencocokan pola 
+\textit{markdown} \texttt{```php ... ```}. Jika pola ini tidak ditemukan, 
+\textit{pipeline} mencoba mengekstraksi blok kode generik \texttt{``` ... ```} 
+sebagai \textit{fallback}. Kode hasil ekstraksi kemudian divalidasi menggunakan 
+\texttt{php -l} untuk memverifikasi kebenaran sintaksisnya sebelum disertakan 
+dalam laporan. Jika tidak ada blok kode yang berhasil diekstraksi sama sekali, 
+respons tetap dicatat dengan \textit{placeholder} \texttt{// Manual review required}.
+\newpage
+Contoh keluaran yang diharapkan dari model untuk temuan di atas:
+
+\begin{lstlisting}[style=promptstyle]
+### Explanation of Vulnerability
+The code uses $_SERVER['QUERY_STRING'] directly in cache
+path construction without sanitization, allowing path
+traversal or cache poisoning attacks.
+
+Here's the corrected PHP 8.x code:
+```php
+$uri .= '?' . urlencode($_SERVER['QUERY_STRING']);
+$cache_path .= md5(
+    $CI->config->item('base_url')
+    . $CI->config->item('index_page')
+    . ltrim($uri, '/'));
+
+if (!@unlink($cache_path)) {
+    log_message('error',
+        'Unable to delete cache file for '
+        . urlencode($uri));
+    return FALSE;
+}
+```
+CONFIDENCE: 78
+\end{lstlisting}
+Tiga elemen yang harus hadir sekaligus agar respons dihitung
+patuh format: penjelasan kerentanan, blok kode PHP yang valid,
+dan baris \texttt{CONFIDENCE:} di akhir.
+
+Teks lengkap \textit{prompt} Kondisi B untuk masing-masing model
+disertakan pada Lampiran~\ref{app:prompt-kondisi-b}.
+
+\subsection{Keputusan Desain Prompt}
+
+\textbf{Penyertaan kontrol ISO/IEC 27001:2022:} Kontrol ISO yang relevan disertakan di setiap \textit{prompt}. Informasi ini bertujuan untuk mendorong model menghasilkan saran perbaikan yang mempertimbangkan kepatuhan standar, bukan sekadar memperbaiki sintaks.
+
+\textbf{Instruksi format di akhir pesan:} Format \texttt{CONFIDENCE: [0-100]} diletakkan di bagian akhir dengan instruksi eksplisit termasuk contoh konkret. Model kecil cenderung lebih patuh pada instruksi yang dekat dengan akhir pesan.
+
+\textbf{Parsing skor berlapis:} Karena tidak semua model mengikuti format yang diminta, \texttt{ai\_engine.py} menggunakan enam pola \textit{regex} berurutan untuk mengekstraksi skor: (0) tag XML \texttt{<confidence>}, (1) bilangan bulat dekat kata ``confidence'', (2) desimal 0.x dekat ``confidence'', (3) persentase dekat ``confidence'', (4) desimal \textit{bare} di mana saja, dan (5) frasa bahasa alami seperti ``not sure'' yang dipetakan ke nilai tetap. Jika seluruh pola gagal diekstraksi, sistem akan mengembalikan nilai \textit{default} 0,0.
+
+\textbf{Temperature 0,1:} Dipilih untuk meminimalkan variasi acak antar percobaan. Setiap model dijalankan tiga kali per temuan dengan \textit{prompt} identik, 
+sehingga perbedaan hasil antar \textit{run} mencerminkan variabilitas 
+model yang sebenarnya. Ollama tidak menyediakan pengaturan \textit{seed} inferensi yang 
+konsisten untuk seluruh model yang diuji, sehingga variasi kecil 
+antar \textit{run} tetap mungkin terjadi meskipun \textit{temperature} 
+dibuat rendah (0,1).
+
+\textbf{Zero-shot tanpa contoh:} Tidak ada contoh perbaikan kode disertakan karena penelitian ingin mengevaluasi kemampuan bawaan model dalam kondisi yang mencerminkan penggunaan nyata. Hal ini juga memastikan bahwa seluruh model dibandingkan pada kondisi yang setara.
+
+\textbf{Skor kepercayaan sebagai metrik sekunder:} Skor ini adalah penilaian mandiri dari model dan tidak bisa diverifikasi secara independen. Dalam analisis Bab IV, skor kepercayaan adalah metrik sekunder; metrik primer adalah validitas sintaks kode yang dihasilkan, diukur dengan \texttt{php -l}.
+
+
+\section{Desain Pemetaan ISO/IEC 27001:2022}
+
+\label{sec:iso-mapping-design}
+
+\begin{sloppypar}
+
+Pemetaan temuan ke kontrol ISO/IEC 27001:2022 dilakukan secara berbasis 
+aturan (\textit{rule-based}) di dalam \texttt{iso\_mapper.py}. 
+Data diterima langsung sebagai objek Python \textit{in-memory} dari \texttt{main.py}, 
+tidak dibaca dari \textit{file} JSON. Pendekatan berbasis aturan ini dipilih agar hasilnya deterministik dan bisa diaudit, berbeda dari pendekatan berbasis AI yang hasilnya bisa berubah antar inferensi. Ada enam kontrol yang dipetakan, sebagaimana ditunjukkan pada Tabel \ref{tab:iso-mapping}.
+
+\end{sloppypar}
+\begin{table}[htbp]
+\caption{Pemetaan sumber temuan ke kontrol ISO/IEC 27001:2022 Annex A}
+\vspace{0.5em}
+\centering
+\label{tab:iso-mapping}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{|l|l|>{\raggedright\arraybackslash}X|}
+\hline
+\textbf{Kontrol ISO} & \textbf{Judul} & \textbf{Sumber temuan yang dipetakan} \\
+\hline \hline
+A.5.17 & \textit{Authentication Information} & Semgrep: \textit{hardcoded credentials} \\
+\hline
+A.8.24 & \textit{Use of Cryptography} & Semgrep: \texttt{md5()}/\texttt{sha1()} untuk kata sandi \\
+\hline
+A.8.25 & \textit{Secure Development Lifecycle} & Semgrep (semua) + PHPStan ERROR/WARNING \\
+\hline
+A.8.26 & \textit{Application Security Requirements} & Semgrep: SQL Injection, XSS \\
+\hline
+A.8.28 & \textit{Secure Coding} & Semgrep (semua) + PHPStan ERROR \\
+\hline
+A.8.29 & \textit{Security Testing in Development} &
+Semgrep: \textit{Path Traversal}/SSRF + PHPStan ERROR/WARNING \\
+\hline
+\end{tabularx}
+\end{table}
+
+
+Status akhir setiap kontrol ditentukan berdasarkan ada tidaknya temuan terbuka setelah \textit{pipeline} selesai. \texttt{COMPLIANT} berarti tidak ada temuan yang dipetakan ke kontrol tersebut. \texttt{NON\_COMPLIANT} berarti ada temuan Semgrep aktif. \texttt{PARTIAL} berarti hanya ada temuan PHPStan tanpa temuan Semgrep. Status COMPLIANT pada A.5.17 dan A.8.24 tidak menjamin bahwa kode telah terbebas dari kerentanan secara mutlak; status tersebut sekadar menunjukkan bahwa \textit{ruleset} yang digunakan tidak menghasilkan temuan yang dipetakan ke kedua kontrol itu pada dataset ini.
+\newpage
+\subsection{Mekanisme Klasifikasi Temuan}
+
+Pemetaan dari hasil temuan Semgrep ke kontrol ISO dilakukan dengan fungsi
+\texttt{\_classify()} di \texttt{scanner.py}. Fungsi ini memeriksa
+\texttt{rule\_id} dan \texttt{message} dari setiap temuan Semgrep
+menggunakan pencocokan \textit{substring} (bukan ekspresi reguler)
+terhadap daftar kata kunci yang telah ditetapkan. Hasilnya adalah
+penugasan \texttt{vuln\_type}, daftar \texttt{iso\_controls}, dan
+nilai prioritas. Tabel \ref{tab:keyword-mapping} menunjukkan pemetaan
+kata kunci ke jenis kerentanan dan kontrol ISO yang ditugaskan.
+
+\begin{table}[htbp]
+\caption{Pemetaan kata kunci \texttt{rule\_id} Semgrep ke jenis
+kerentanan dan kontrol ISO/IEC 27001:2022}
+\vspace{0.5em}
+\centering
+\label{tab:keyword-mapping}
+\renewcommand{\arraystretch}{1.6}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}X|l|l|c|}
+\hline
+\textbf{Kata Kunci (\texttt{rule\_id}/\texttt{message})} &
+\textbf{Jenis Kerentanan} &
+\textbf{Kontrol ISO} &
+\textbf{Prioritas} \\
+\hline \hline
+\texttt{sql}, \texttt{sqli}, \texttt{injection} &
+SQL Injection & A.8.26, A.8.28 & 1 \\
+\hline
+\texttt{xss}, \texttt{cross-site} &
+XSS & A.8.26, A.8.28 & 2 \\
+\hline
+\texttt{deprecated}, \texttt{mysql\_} &
+Fungsi Usang & A.8.25, A.8.28 & 3 \\
+\hline
+\texttt{hardcoded}, \texttt{secret}, \texttt{password} &
+Kredensial Hardcoded & A.5.17, A.8.28 & 4 \\
+\hline
+\texttt{path}, \texttt{traversal} &
+Path Traversal & A.8.28, A.8.29 & 5 \\
+\hline
+\texttt{ssrf}, \texttt{server - side - request - forgery} &
+SSRF & A.8.28, A.8.29 & 5 \\
+\hline
+\texttt{md5}, \texttt{sha1}, \texttt{weak-crypto}, \texttt{weak-hash} &
+Kriptografi Lemah & A.8.24, A.8.28 & 6 \\
+\hline
+\end{tabularx}
+\end{table}
+Pendekatan \textit{keyword matching} ini dipilih dibandingkan pendekatan berbasis AI karena tiga alasan. Pertama,
+hasilnya deterministik: temuan yang sama selalu menghasilkan
+pemetaan yang sama tanpa variasi antar inferensi. Kedua, pendekatan ini 
+sepenuhnya dapat diaudit karena seluruh logika pemetaannya tersimpan 
+dalam bentuk kode Python yang mudah diperiksa dan diverifikasi.
+Ketiga, tidak memerlukan koneksi eksternal atau model tambahan,
+sehingga konsisten dengan persyaratan privasi data yang ditetapkan
+dalam Subbab \ref{sec:data-privacy}.
+\newpage
+\section{Rancangan Eksperimen Komparasi Model LLM}
+
+Eksperimen komparasi dirancang dengan kondisi yang dikontrol ketat dan dilakukan terpisah dari pengujian \textit{pipeline} utama menggunakan skrip evaluasi khusus. Pemisahan ini bukan sekadar pilihan implementasi, melainkan kebutuhan validitas: performa Rector dan Semgrep bersifat deterministik, sedangkan performa model LLM bersifat stokastik. Jika perbandingan model dijalankan sebagai bagian dari eksekusi \textit{pipeline} penuh, variasi pada tahap-tahap sebelumnya (misalnya jumlah dan urutan temuan yang berbeda antar dataset atau antar versi target) akan menjadi perancu (\textit{confounding variable}) yang mengaburkan perbandingan antar model. Dengan menetapkan 11 temuan Semgrep \textit{pre-scan} dataset FT UGM yang identik sebagai \textit{input} tetap untuk seluruh model dan kondisi eksperimen, perbedaan hasil yang terukur dapat diatribusikan pada perbedaan kemampuan model, bukan pada variasi rangkaian \textit{pipeline} di tahap lain.
+
+\subsection{Baseline Pembanding}
+
+Penelitian ini tidak memiliki \textit{baseline} eksternal dalam arti tidak ada alat atau penelitian terdahulu yang menjalankan tugas yang identik -- menerjemahkan temuan Semgrep pada kode PHP menjadi penjelasan dan saran remediasi menggunakan LLM lokal -- sehingga tidak tersedia titik pembanding dari luar untuk mengklaim bahwa pendekatan ini ``lebih baik'' dari pendekatan lain secara mutlak. Sebagai gantinya, validitas perbandingan dibangun melalui dua mekanisme pembanding internal. Pertama, \textbf{Kondisi A} berfungsi sebagai \textit{baseline zero-shot} yang sama untuk kelima model, sehingga Kondisi B dan Kondisi C dapat diukur sebagai peningkatan relatif terhadap kondisi awal yang setara, bukan terhadap titik nol yang sewenang-wenang. Kedua, perbandingan lintas-model itu sendiri berfungsi sebagai \textit{baseline} relatif: pertanyaan yang dijawab bukan ``apakah pendekatan ini efektif secara absolut'', melainkan ``model mana, di antara kandidat yang memenuhi batasan privasi data dan perangkat keras pada Subbab~\ref{sec:data-privacy}, yang paling sesuai untuk peran ini''. Ketiadaan \textit{baseline} eksternal ini diakui sebagai keterbatasan penelitian dan dibahas lebih lanjut pada Bab V.
+
+Eksperimen ini mencakup tiga kondisi yang dirancang secara bertahap. \textbf{Kondisi A} adalah \textit{baseline}: semua model menerima \textit{prompt} yang identik secara \textit{zero-shot} tanpa optimasi apa pun. \textbf{Kondisi B} mengoptimasi \textit{prompt} per model berdasarkan pola kegagalan yang terobservasi pada Kondisi A, untuk mengetahui sejauh mana performa model bisa ditingkatkan melalui penyesuaian \textit{prompt}. \textbf{Kondisi C} mengeksplorasi variasi parameter \textit{temperature} dan \textit{context window} pada model terbaik hasil Kondisi A dan B.
+
+\subsection{Kondisi Eksperimen}
+
+\begin{itemize}
+
+    \item \textbf{Input}: 11 temuan Semgrep dari \textit{pre-scan} dataset FT UGM
+
+    \item \textbf{Jumlah percobaan}: 3 \textit{run} per temuan per model (33 percobaan per model, 165 total)
+
+    \item \textbf{Temperature}: 0,1 untuk semua model
+
+    \item \textbf{Prompt}: identik untuk semua model pada 
+Kondisi A (\textit{zero-shot}); dioptimasi per model 
+pada Kondisi B
+    \item \textbf{Model}: dijalankan lokal melalui Ollama tanpa modifikasi
+
+\end{itemize}
+\subsection{Metrik Evaluasi}
+\label{sec:metrik-evaluasi}
+
+Definisi formal seluruh metrik yang digunakan dalam penelitian ini
+beserta landasannya dalam literatur telah diuraikan dalam
+Subbab~\ref{subsec:metrik-llm}. Secara ringkas, lima metrik yang
+diterapkan adalah: Conversion Rate (CR) untuk mengukur keberhasilan
+konversi Rector, Format Compliance Rate (FCR) untuk mengukur kepatuhan
+format respons model, Syntax Validity Rate (SVR) sebagai metrik primer
+kualitas kode yang dihasilkan, Security Finding Delta ($\Delta F$) untuk
+mengukur perubahan postur keamanan pasca-konversi, dan Mean Confidence
+Score ($\bar{C}_m$) sebagai metrik sekunder konsistensi model.
+
+Dalam eksperimen ini, setiap model dijalankan sebanyak 33 percobaan
+(3 \textit{run} per temuan, 11 temuan), sehingga $r_{total} = 33$ per
+model untuk perhitungan FCR. SVR ditetapkan sebagai metrik primer karena
+hasilnya dapat diverifikasi secara independen menggunakan \texttt{php -l},
+sedangkan $\bar{C}_m$ bersifat sekunder karena merupakan penilaian mandiri
+model yang tidak dapat diverifikasi dari luar.
+
+\subsection{Interpretasi \textit{Trade-off} Antar Metrik}
+
+FCR dan SVR merupakan dua dimensi yang independen dan perlu
+diinterpretasikan bersama, sebagaimana dijelaskan dalam
+Subbab~\ref{subsec:metrik-llm}. Model dengan FCR tinggi namun SVR
+rendah menunjukkan kemampuan mengikuti instruksi format tetapi
+kualitas kode yang buruk. Sebaliknya, model dengan FCR rendah namun
+SVR tinggi mengabaikan instruksi format tetapi menghasilkan kode
+berkualitas baik. Kedua kondisi ini punya implikasi praktis yang
+berbeda dan dibahas secara empiris di Bab IV.
+\section{Metode Pengujian dan Evaluasi}
+
+Pengujian dilakukan dengan pendekatan berbasis keluaran 
+(\textit{output-oriented evaluation}), dengan fokus pada hasil
+setiap modul dibandingkan dengan detail implementasi internalnya.
+Terdapat lima metrik utama:
+
+\begin{enumerate}
+
+    \item \textbf{Tingkat konversi Rector}: Persentase \textit{file} PHP yang berhasil dikonversi tanpa kesalahan fatal Rector, dihitung per \textit{file} dan secara keseluruhan.
+
+    \item \textbf{Validitas sintaks pasca-konversi}: Persentase \textit{file} hasil konversi yang lolos \texttt{php -l}. Diukur secara objektif. Validitas sintaks tidak menjamin kebenaran logika program atau 
+keamanan hasil transformasi, tetapi dipilih sebagai metrik primer 
+karena dapat diverifikasi secara objektif dan otomatis.
+
+    \item \textbf{Perbedaan temuan keamanan}: Selisih jumlah temuan Semgrep antara \textit{pre-scan} dan \textit{post-scan}. Temuan baru setelah konversi tidak otomatis diinterpretasikan sebagai regresi keamanan, tetapi
+    hal tersebut dapat mencerminkan kerentanan laten yang sebelumnya tersembunyi.
+
+    \item \textbf{Performa model LLM}: Diukur menggunakan \textit{format compliance rate} (sekunder) dan \textit{syntax validity rate} (primer) sebagaimana dijelaskan dalam Subbab \ref{sec:metrik-evaluasi}.
+
+    \item \begin{sloppypar}\textbf{Status kepatuhan ISO/IEC 27001:2022}: Status per kontrol (\texttt{COMPLIANT}, \texttt{PARTIAL}, atau \texttt{NON\_COMPLIANT}) berdasarkan logika pemetaan dalam Subbab \ref{sec:iso-mapping-design}.\end{sloppypar}
+
+\end{enumerate}
+
+Untuk hasil PHPStan, jumlah kesalahan yang tinggi tidak secara langsung diinterpretasikan sebagai kegagalan \textit{pipeline}. Kesalahan PHPStan pada kode warisan yang baru dimigrasi sebagian besar mencerminkan \textit{technical debt} yang sudah ada sebelum migrasi, bukan akibat dari proses konversi. Pembedaan ini dibahas lebih rinci di Bab IV.

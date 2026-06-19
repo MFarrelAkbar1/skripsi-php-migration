@@ -121,16 +121,19 @@ _CI3_NOISE_SUBSTRINGS: tuple[str, ...] = (
     "Function is_https not found",
     "Function is_cli not found",
     "Function remove_invisible_characters not found",
-    # Composer packages absent from output/ (vendor/ not copied by Rector)
-    "unknown class Dotenv\\",
+    # Composer packages absent from output/ (vendor/ not copied by Rector).
+    # Matched on the bare namespace so both "unknown class X\..." and
+    # "Instantiated class X\... not found" phrasings are caught -- PHPStan
+    # uses different verbs depending on how the class is referenced.
+    "Dotenv\\",
     "createUnsafeImmutable",
     "createMutable",
-    "unknown class PhpOffice\\",
-    "unknown class Firebase\\",
-    "unknown class Google\\",
-    "unknown class chriskacerguis\\",
-    "unknown class Kreait\\",
-    "unknown class Ngekoding\\",
+    "PhpOffice\\",
+    "Firebase\\",
+    "Google\\",
+    "chriskacerguis\\",
+    "Kreait\\",
+    "Ngekoding\\",
 )
 
 console = Console()
@@ -189,14 +192,17 @@ class AnalysisResult:
 
     Fields
     ------
-    errors:     sorted list of AnalysisError (by file, then line)
-    summary:    aggregate statistics
-    raw_output: original parsed JSON from PHPStan (for audit / reporting)
+    errors:         sorted list of AnalysisError (by file, then line)
+    summary:        aggregate statistics
+    raw_output:     original parsed JSON from PHPStan (for audit / reporting)
+    noise_messages: CI3 framework false-positive messages filtered out of
+                    ``errors`` (kept for audit / category breakdown)
     """
 
     errors: list[AnalysisError]
     summary: AnalysisSummary
     raw_output: dict
+    noise_messages: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +294,7 @@ class PHPStanAnalyzer:
         )
         exit_code, stdout, stderr, elapsed = self._invoke_phpstan(cmd)
         raw = self._parse_phpstan_json(stdout, stderr, exit_code)
-        errors, noise_count = self._build_errors(raw)
+        errors, noise_count, noise_messages = self._build_errors(raw)
         errors.sort(key=lambda e: e.sort_key())
         summary = self._build_summary(
             errors=errors,
@@ -298,7 +304,12 @@ class PHPStanAnalyzer:
             php_version=php_version,
             noise_count=noise_count,
         )
-        result = AnalysisResult(errors=errors, summary=summary, raw_output=raw)
+        result = AnalysisResult(
+            errors=errors,
+            summary=summary,
+            raw_output=raw,
+            noise_messages=noise_messages,
+        )
         self._print_results(result)
         return result
 
@@ -541,7 +552,9 @@ class PHPStanAnalyzer:
     # Error list construction
     # ------------------------------------------------------------------
 
-    def _build_errors(self, raw: dict) -> tuple[list[AnalysisError], int]:
+    def _build_errors(
+        self, raw: dict
+    ) -> tuple[list[AnalysisError], int, list[str]]:
         """
         Convert PHPStan's parsed JSON into a flat list of ``AnalysisError``.
 
@@ -550,12 +563,15 @@ class PHPStanAnalyzer:
 
         Returns
         -------
-        (errors, noise_count)
+        (errors, noise_count, noise_messages)
             ``errors`` contains real application errors only.
             ``noise_count`` counts CI3 framework false positives that were filtered.
+            ``noise_messages`` keeps the filtered messages themselves for audit /
+            category breakdown (e.g. distinguishing CI3 noise from custom-app errors).
         """
         result: list[AnalysisError] = []
         noise_count: int = 0
+        noise_messages: list[str] = []
 
         # File-specific errors
         for file_path, file_data in raw.get("files", {}).items():
@@ -564,6 +580,7 @@ class PHPStanAnalyzer:
                 line: int = msg_entry.get("line", 0) or 0
                 if self._is_ci3_noise(message):
                     noise_count += 1
+                    noise_messages.append(f"{file_path}:{line} -- {message}")
                     continue
                 severity, iso_controls = self._classify_error(message)
                 result.append(
@@ -581,6 +598,7 @@ class PHPStanAnalyzer:
             if isinstance(err, str) and err.strip():
                 if self._is_ci3_noise(err):
                     noise_count += 1
+                    noise_messages.append(f"<phpstan>:0 -- {err}")
                     continue
                 severity, iso_controls = self._classify_error(err)
                 result.append(
@@ -593,7 +611,7 @@ class PHPStanAnalyzer:
                     )
                 )
 
-        return result, noise_count
+        return result, noise_count, noise_messages
 
     # ------------------------------------------------------------------
     # Summary construction

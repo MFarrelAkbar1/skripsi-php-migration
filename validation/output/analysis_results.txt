@@ -1,0 +1,129 @@
+======================================================================
+HASIL ANALISIS B0 vs T1 -- EKSPERIMEN BASELINE
+======================================================================
+
+Jumlah rater      : 2
+Rater             : rater_test1, rater_test2
+
+----------------------------------------------------------------------
+CATATAN INTERPRETASI
+----------------------------------------------------------------------
+Hasil gabungan (n=11) didominasi kelompok SSRF yang homogen (10 dari 11 temuan). Deskripsi rule Semgrep untuk SSRF identik untuk semua 10 temuan, dan respons AI juga sangat serupa karena konteks kode yang terbatas. Hasil gabungan TIDAK boleh diinterpretasikan sebagai representasi temuan yang beragam -- gunakan hasil per kelompok (SQLi vs SSRF) untuk interpretasi yang lebih akurat.
+
+----------------------------------------------------------------------
+GABUNGAN (n=11)
+----------------------------------------------------------------------
+
+  Akurasi:
+    n = 22
+    B0 mean=3.59, median=4.0
+    T1 mean=4.27, median=5.0
+    Diff mean=0.68, median=0.5
+    Wilcoxon W=60.0, p=0.2642
+    Significant at alpha=0.05: NO
+
+  Kejelasan:
+    n = 22
+    B0 mean=3.64, median=4.0
+    T1 mean=3.05, median=3.0
+    Diff mean=-0.59, median=-0.5
+    Wilcoxon W=79.5, p=0.3383
+    Significant at alpha=0.05: NO
+
+  Actionability:
+    n = 22
+    B0 mean=4.45, median=4.5
+    T1 mean=3.82, median=3.5
+    Diff mean=-0.64, median=-0.5
+    Wilcoxon W=55.5, p=0.3170
+    Significant at alpha=0.05: NO
+
+  Ketepatan ISO:
+    n = 22
+    B0 mean=4.32, median=4.0
+    T1 mean=4.23, median=4.0
+    Diff mean=-0.09, median=0.0
+    Wilcoxon W=75.5, p=0.9620
+    Significant at alpha=0.05: NO
+
+----------------------------------------------------------------------
+KELOMPOK SQL INJECTION (n=1)
+----------------------------------------------------------------------
+
+  Akurasi:
+    n = 2
+    B0 mean=6.00, median=6.0
+    T1 mean=6.50, median=6.5
+    Diff mean=0.50, median=0.5
+    Cannot run Wilcoxon: fewer than 2 non-zero differences.
+
+  Kejelasan:
+    n = 2
+    B0 mean=3.50, median=3.5
+    T1 mean=3.50, median=3.5
+    Diff mean=0.00, median=0.0
+    Wilcoxon W=1.5, p=1.0000
+    Significant at alpha=0.05: NO
+
+  Actionability:
+    n = 2
+    B0 mean=5.00, median=5.0
+    T1 mean=1.00, median=1.0
+    Diff mean=-4.00, median=-4.0
+    Wilcoxon W=0.0, p=0.5000
+    Significant at alpha=0.05: NO
+
+  Ketepatan ISO:
+    n = 2
+    B0 mean=3.50, median=3.5
+    T1 mean=2.50, median=2.5
+    Diff mean=-1.00, median=-1.0
+    Cannot run Wilcoxon: fewer than 2 non-zero differences.
+
+----------------------------------------------------------------------
+KELOMPOK SSRF (n=10)
+----------------------------------------------------------------------
+
+  Akurasi:
+    n = 20
+    B0 mean=3.35, median=3.5
+    T1 mean=4.05, median=4.5
+    Diff mean=0.70, median=0.5
+    Wilcoxon W=53.5, p=0.2739
+    Significant at alpha=0.05: NO
+
+  Kejelasan:
+    n = 20
+    B0 mean=3.65, median=4.0
+    T1 mean=3.00, median=3.0
+    Diff mean=-0.65, median=-0.5
+    Wilcoxon W=63.5, p=0.3351
+    Significant at alpha=0.05: NO
+
+  Actionability:
+    n = 20
+    B0 mean=4.40, median=4.0
+    T1 mean=4.10, median=4.0
+    Diff mean=-0.30, median=0.0
+    Wilcoxon W=52.5, p=0.6682
+    Significant at alpha=0.05: NO
+
+  Ketepatan ISO:
+    n = 20
+    B0 mean=4.40, median=4.0
+    T1 mean=4.40, median=4.5
+    Diff mean=0.00, median=0.0
+    Wilcoxon W=64.5, p=0.8556
+    Significant at alpha=0.05: NO
+
+----------------------------------------------------------------------
+INTER-RATER AGREEMENT (Cohen's Kappa)
+----------------------------------------------------------------------
+
+  rater_test1_vs_rater_test2:
+    Akurasi: kappa=-0.097 (Less than chance agreement)
+    Kejelasan: kappa=-0.017 (Less than chance agreement)
+    Actionability: kappa=0.055 (Slight agreement)
+    Ketepatan ISO: kappa=0.065 (Slight agreement)
+
+======================================================================

@@ -1,0 +1,1488 @@
+PERSIAPAN SIDANG -- PERTANYAAN HOTS (HIGHER ORDER THINKING SKILLS)
+Fokus: Aspek AI / LLM (untuk dosen penguji spesialis AI)
+Judul: Migrasi Otomatis Kode PHP Legacy ke PHP 8.x Menggunakan LLM Lokal
+       dengan Kerangka Keamanan ISO/IEC 27001:2022
+
+===============================================================================
+A. ARSITEKTUR & MEKANISME MODEL
+===============================================================================
+
+Q1: Semua model yang dibandingkan (DeepSeek Coder, Qwen2.5-Coder, CodeLlama,
+    Mistral, Llama 3.1) adalah arsitektur decoder-only transformer. Mengapa
+    tidak mempertimbangkan arsitektur encoder-decoder (seperti CodeT5 atau
+    StarCoder dengan fill-in-the-middle encoder)? Apa implikasinya terhadap
+    tugas "perbaikan kode" yang sebenarnya bersifat seq2seq (kode rusak ->
+    kode benar)?
+
+A1: Pemilihan model decoder-only didasarkan pada tiga pertimbangan praktis.
+    Pertama, ketersediaan di Ollama -- ekosistem Ollama didominasi model
+    decoder-only berukuran 7B-8B yang feasible dijalankan di RAM 16GB tanpa
+    GPU dedicated, sedangkan model encoder-decoder seperti CodeT5+ jarang
+    tersedia dalam format GGUF terkuantisasi siap pakai. Kedua, tugas dalam
+    penelitian ini bukan murni seq2seq translation (kode A -> kode B), tapi
+    instruction-following: model diminta menjelaskan kerentanan DAN
+    menghasilkan kode perbaikan dalam satu respons naratif -- ini lebih
+    cocok dengan paradigma instruct-tuned decoder-only yang sudah terbiasa
+    dengan format chat/instruksi. Ketiga, mekanisme FIM (Fill-in-the-Middle)
+    yang digunakan untuk snippet pendek (<=3 baris) sebenarnya adalah cara
+    decoder-only model "meniru" kemampuan encoder-decoder -- model dilatih
+    dengan reordering PSM (Prefix-Suffix-Middle) sehingga bisa menghasilkan
+    konten di tengah teks meski arsitekturnya tetap autoregressive kiri-ke-
+    kanan.
+
+    Implikasinya: pendekatan ini mengorbankan efisiensi (decoder-only harus
+    meregenerasi seluruh konteks meski hanya sebagian kecil kode yang
+    berubah) demi kompatibilitas dengan ekosistem lokal/offline yang menjadi
+    syarat privasi data penelitian ini. Ini dicatat sebagai trade-off
+    arsitektural, bukan keterbatasan yang tidak disadari.
+
+-------------------------------------------------------------------------------
+
+Q2: Model dijalankan via Ollama yang menggunakan format GGUF dengan
+    kuantisasi (umumnya Q4_K_M, 4-bit). Bagaimana Anda memastikan bahwa
+    perbedaan SVR (Syntax Validity Rate) antar model bukan disebabkan oleh
+    perbedaan level kuantisasi, melainkan kemampuan model itu sendiri?
+
+A2: Ini adalah ancaman terhadap validitas internal yang valid dan perlu
+    diakui. Dalam penelitian ini, seluruh 5 model ditarik dari Ollama
+    library menggunakan tag default (mis. "deepseek-coder:6.7b",
+    "qwen2.5-coder:7b") -- yang secara konsisten merujuk pada kuantisasi
+    Q4_K_M sebagai default Ollama untuk model berukuran 7B-8B pada saat
+    eksperimen dilakukan. Dengan kata lain, level kuantisasi adalah
+    KONSTAN (bukan variabel bebas) di seluruh perbandingan, sehingga
+    perbedaan SVR antar model dapat diatribusikan ke perbedaan kemampuan
+    model dasar (pretraining data, ukuran parameter, instruction-tuning),
+    bukan ke kuantisasi.
+
+    Namun benar bahwa kuantisasi 4-bit secara umum dapat menurunkan
+    kemampuan generasi kode dibanding model presisi penuh (FP16) --
+    sehingga angka SVR absolut (mis. Qwen 100%) mungkin sedikit berbeda
+    pada model FP16. Ini dicatat sebagai keterbatasan eksternal validity:
+    hasil penelitian ini menggambarkan performa model dalam KONFIGURASI
+    DEPLOYMENT REALISTIS untuk hardware konsumer (16GB RAM), bukan performa
+    model pada kondisi idealnya. Ini justru relevan secara praktis karena
+    mencerminkan kondisi nyata yang akan dihadapi institusi seperti FT UGM
+    jika mengadopsi pipeline ini.
+
+-------------------------------------------------------------------------------
+
+Q3: Context window (`num_ctx`) di-set 4096 token, padahal DeepSeek Coder
+    6.7B dan Qwen2.5-Coder 7B mendukung context window native hingga 16K-
+    32K token. Mengapa tidak memanfaatkan kapasitas penuh model, dan
+    bagaimana keputusan ini memengaruhi kualitas analisis untuk file PHP
+    yang panjang?
+
+A3: Ada dua alasan: keterbatasan hardware dan desain eksperimen yang
+    terkontrol. Pertama, num_ctx yang lebih besar secara linear meningkatkan
+    kebutuhan KV-cache memory -- pada RAM 16GB tanpa GPU dedicated, context
+    window besar (16K) menyebabkan model di-offload sebagian ke disk/swap,
+    memperlambat inferensi secara drastis (dari puluhan detik menjadi
+    menit per request), yang tidak feasible untuk 165 total run (5 model x
+    11 temuan x 3 run). Kedua, MAX_CODE_CHARS dibatasi 2000 karakter
+    SEBELUM masuk ke prompt, sehingga konteks 4096 token (~16.000 karakter)
+    sudah jauh lebih dari cukup untuk menampung snippet kode + instruksi +
+    respons -- num_ctx 4096 bukan bottleneck utama, MAX_CODE_CHARS lah yang
+    membatasi.
+
+    Konsekuensinya memang nyata: untuk file panjang seperti Output.php,
+    potongan 2000 karakter tidak menyertakan definisi fungsi/variabel yang
+    direferensikan di luar snippet, sehingga model "buta konteks" --
+    terlihat dari confidence 0% pada temuan SQL Injection di Output.php
+    baris 768. Eksperimen tambahan (Kondisi C) menguji MAX_CODE_CHARS 4000
+    dan 8000: extraction rate naik dari 97% ke 100%, tapi peningkatan
+    SVR/confidence marginal -- mengindikasikan bottleneck utamanya bukan
+    panjang konteks, melainkan KEMAMPUAN REASONING model terhadap kode yang
+    bergantung pada arsitektur framework (CodeIgniter 3 magic methods) yang
+    tidak terlihat eksplisit di snippet manapun.
+
+-------------------------------------------------------------------------------
+
+Q4: `_OLLAMA_OPTIONS` menetapkan `stop: ["```\n\n", "---"]`. Bukankah
+    stop sequence ini berisiko memotong respons model secara prematur,
+    terutama jika model menulis "---" sebagai pemisah horizontal di tengah
+    penjelasan markdown (yang lazim pada model instruct)?
+
+A4: Ya, ini adalah risiko nyata dan menjadi salah satu sumber variasi
+    extraction rate antar model. Stop sequence "---" dipilih berdasarkan
+    observasi awal bahwa beberapa model (terutama Mistral dan Llama3.1)
+    cenderung menambahkan separator markdown atau melanjutkan dengan
+    section baru (mis. "--- END ---" atau "--- Additional Notes ---")
+    setelah blok kode dan baris CONFIDENCE selesai -- tanpa stop sequence
+    ini, model bisa menghasilkan teks tambahan yang tidak relevan dan
+    memperlambat inferensi (num_predict 1024 token penuh terpakai).
+
+    Namun trade-off-nya: jika model menulis "---" SEBELUM menyelesaikan
+    bagian CONFIDENCE (mis. menggunakan "---" sebagai pemisah antara
+    penjelasan dan kode), respons akan terpotong dan baris CONFIDENCE tidak
+    pernah dihasilkan -- ini berkontribusi pada FCR (Format Compliance Rate)
+    yang rendah pada beberapa model. Stop sequence "```\n\n" (code fence
+    diikuti baris kosong ganda) dipilih sebagai sinyal "blok kode selesai"
+    yang lebih presisi, tapi juga bisa terpicu prematur jika model menulis
+    multiple code block (mis. "before" dan "after" snippet). Ini adalah
+    keterbatasan desain prompt yang diakui -- idealnya stop sequence
+    di-tuning per model, tapi itu akan melanggar prinsip zero-shot
+    comparison yang identik di Kondisi A.
+
+-------------------------------------------------------------------------------
+
+Q5: `_call_ollama_chat` menggunakan endpoint `/api/chat` yang menerapkan
+    chat template native masing-masing model (ChatML untuk Qwen, Llama-3
+    instruct untuk Llama3.1, dll). Apakah ini tidak melanggar prinsip
+    "zero-shot comparison dengan prompt identik"? Bukankah perbedaan chat
+    template berarti setiap model SEBENARNYA menerima input yang berbeda
+    secara token-level, meski konten teksnya sama?
+
+A5: Pertanyaan ini menyentuh perbedaan penting antara "identik secara
+    konten" vs "identik secara token". Penelitian ini secara eksplisit
+    memilih DEFINISI PERTAMA: yang dijaga identik adalah ISI PESAN (system
+    + user message string) yang diberikan ke setiap model, bukan
+    representasi token akhirnya. Alasannya: chat template adalah BAGIAN
+    INTEGRAL dari cara model instruct-tuned dilatih -- mengirim prompt
+    mentah tanpa template (via /api/generate dengan format custom) kepada
+    model ChatML seperti Qwen akan menghasilkan output yang jauh lebih
+    buruk, BUKAN karena modelnya lemah, tapi karena modelnya tidak
+    "mengenali" format input tersebut sebagai instruksi.
+
+    Dengan kata lain, "zero-shot comparison yang adil" di sini didefinisikan
+    sebagai: "jika seorang pengguna mengetik instruksi yang sama persis ke
+    setiap model melalui antarmuka chat standarnya masing-masing, model mana
+    yang menghasilkan kode paling valid?" -- ini mencerminkan skenario
+    deployment realistis (Ollama /api/chat adalah API yang akan dipakai
+    pipeline produksi), bukan skenario akademis "kontrol token-level murni".
+    Trade-off ini didokumentasikan: hasil membandingkan KEMAMPUAN MODEL
+    DALAM EKOSISTEMNYA MASING-MASING, bukan kemampuan murni arsitektur dasar
+    yang diisolasi dari chat template.
+
+===============================================================================
+B. PROMPT ENGINEERING & DESAIN EKSPERIMEN
+===============================================================================
+
+Q6: Kondisi B ("optimized prompts") memberikan strategi BERBEDA untuk setiap
+    model berdasarkan kelemahan masing-masing di Kondisi A. Apakah ini tidak
+    menciptakan bias konfirmasi -- yaitu, optimasi di-overfit pada 11
+    temuan yang sama yang juga dipakai untuk EVALUASI Kondisi B? Bagaimana
+    Anda tahu strategi tersebut akan generalize ke temuan lain?
+
+A6: Ini adalah keterbatasan metodologis yang valid dan diakui secara
+    eksplisit dalam Bab IV sebagai ancaman terhadap validitas eksternal.
+    Strategi Kondisi B memang dirancang BERDASARKAN observasi pola respons
+    model terhadap dataset yang sama (11 temuan FT UGM) yang juga dipakai
+    untuk evaluasi -- secara ketat ini adalah "tuning on the test set" dalam
+    skala kecil.
+
+    Namun ada mitigasi: pertama, strategi yang diterapkan BUKAN tuning
+    parameter numerik (yang rentan overfitting halus), melainkan PERUBAHAN
+    STRUKTURAL pada level instruksi (mis. "perpendek instruksi", "tambahkan
+    satu contoh few-shot", "perkuat persona") yang didasarkan pada POLA
+    KEGAGALAN YANG DAPAT DIJELASKAN SECARA TEORITIS (mis. "distraction"
+    dari few-shot pada model kecil -- merujuk Akuthota et al. 2023), bukan
+    angka spesifik dari 11 temuan tersebut. Kedua, hasil Kondisi B sendiri
+    menunjukkan bahwa optimasi TIDAK SELALU BERHASIL (Mistral memburuk dari
+    FCR 6% ke 0%) -- jika ini murni overfitting yang "dipaksakan berhasil",
+    semua model seharusnya membaik di Kondisi B. Fakta bahwa beberapa
+    strategi GAGAL justru memperkuat bahwa eksperimen ini bersifat
+    eksploratif-jujur, bukan cherry-picking hasil.
+
+    Generalisasi ke temuan lain memang belum diuji -- ini eksplisit menjadi
+    rekomendasi penelitian lanjutan: validasi strategi Kondisi B pada
+    dataset temuan independen (mis. dari DTI UGM) untuk menguji robustness.
+
+-------------------------------------------------------------------------------
+
+Q7: `_extract_confidence()` memiliki 6 tingkat fallback regex, termasuk
+    pemetaan frasa bahasa natural ("confident" -> 0.75, "should work" ->
+    0.60). Bukankah memetakan bahasa natural ke angka presisi 2 desimal
+    memberikan ILUSI presisi kuantitatif pada sesuatu yang sebenarnya
+    kualitatif/subjektif? Bagaimana ini dijustifikasi secara metodologis?
+
+A7: Justifikasinya bukan bahwa pemetaan ini "akurat" secara absolut, tapi
+    bahwa ia DIPERLUKAN untuk membuat metrik confidence DAPAT DIBANDINGKAN
+    secara ordinal antar model -- dan keterbatasannya secara eksplisit
+    diatasi dengan menjadikan confidence sebagai METRIK SEKUNDER, bukan
+    primer. Skala "not sure" (30) < "should work" (60) < "fairly confident"
+    (70) < "straightforward/simple fix" (80) < "confident" (75) dirancang
+    berdasarkan URUTAN RELATIF yang masuk akal secara linguistik (calibrasi
+    psikolinguistik kasar), bukan klaim bahwa "confident" SECARA OBJEKTIF
+    bernilai tepat 75%.
+
+    Yang lebih penting: temuan UTAMA penelitian ini justru MEMBONGKAR
+    asumsi bahwa confidence score (dalam bentuk apapun -- numerik eksplisit
+    atau hasil pemetaan NL) berkorelasi dengan kualitas kode aktual.
+    CodeLlama melaporkan confidence numerik EKSPLISIT (bukan hasil
+    pemetaan NL) rata-rata 0,91 padahal SVR hanya 27-39%. Jadi pemetaan NL
+    di pattern 5 sebenarnya adalah JARING PENGAMAN AGAR FCR TIDAK BIAS
+    TERHADAP MODEL YANG TIDAK MENGGUNAKAN FORMAT NUMERIK -- bukan klaim
+    presisi. Alternatifnya (tidak melakukan ekstraksi NL sama sekali) akan
+    membuat SEMUA respons non-numerik bernilai 0,0 secara default, yang
+    justru lebih menyesatkan karena menyamakan "tidak menjawab format"
+    dengan "model bilang dia tidak yakin".
+
+-------------------------------------------------------------------------------
+
+Q8: Mengapa tidak meminta model mengeluarkan output dalam format JSON
+    terstruktur (mis. menggunakan fitur `format: "json"` yang didukung
+    Ollama, atau JSON mode/grammar-constrained decoding) untuk menghindari
+    kebutuhan parsing regex yang rapuh sama sekali?
+
+A8: Ini pertimbangan yang valid dan sebenarnya sempat dipertimbangkan.
+    Ollama mendukung `format: "json"` yang memaksa output mengikuti JSON
+    schema melalui grammar-constrained decoding (GBNF). Namun ada tiga
+    alasan tidak menggunakannya:
+
+    1. Constrained decoding mengubah PROSES SAMPLING model -- pada setiap
+       langkah, token yang melanggar grammar di-mask (probabilitas 0)
+       sebelum sampling. Ini berarti distribusi probabilitas asli model
+       tidak lagi murni mencerminkan "bagaimana model secara natural
+       merespons" -- yang justru menjadi VARIABEL PENELITIAN: salah satu
+       pertanyaan riset adalah "model mana yang SECARA ALAMI mengikuti
+       instruksi format". Constrained decoding akan memaksa SEMUA model
+       menghasilkan FCR=100% secara artifisial, menghilangkan sinyal yang
+       justru ingin diukur.
+
+    2. Constrained decoding dapat menurunkan kualitas konten yang
+       dihasilkan -- penelitian (mis. Tam et al., 2024 "Let Me Speak
+       Freely?") menunjukkan model yang dipaksa output JSON terstruktur
+       sering menghasilkan REASONING YANG LEBIH DANGKAL dibanding model
+       yang menjelaskan secara bebas dulu (chain-of-thought) sebelum
+       memberikan jawaban final -- ini berisiko menurunkan SVR (metrik
+       primer) demi memperbaiki FCR (metrik sekunder).
+
+    3. Dukungan grammar-constrained decoding di Ollama bervariasi
+       antar versi model/quantization saat eksperimen dilakukan, sehingga
+       menggunakannya akan mengorbankan KONSISTENSI eksperimen antar 5
+       model yang menjadi prioritas desain.
+
+    Trade-off-nya memang parsing regex 6-level yang dijelaskan di Q7 --
+    tapi ini dianggap biaya yang lebih kecil dibanding mengorbankan
+    validitas pengukuran FCR dan SVR itu sendiri.
+
+===============================================================================
+C. METODOLOGI STATISTIK & EVALUASI
+===============================================================================
+
+Q9: Setiap model dijalankan 3 kali per temuan (n=3) untuk menghitung
+    confidence_variance dan confidence_stdev. Secara statistik, n=3 sangat
+    kecil untuk estimasi varians yang stabil. Bagaimana Anda
+    mempertanggungjawabkan klaim "stabilitas model" berdasarkan sampel
+    sekecil ini?
+
+A9: Diakui secara eksplisit bahwa n=3 tidak cukup untuk INFERENSI
+    STATISTIK FORMAL (mis. uji hipotesis dengan confidence interval yang
+    sempit) -- nilai variance/stdev dari n=3 memiliki derajat kebebasan
+    yang sangat rendah (df=2), sehingga estimasi varians populasi bisa
+    sangat bias. n=3 dipilih murni karena KETERBATASAN SUMBER DAYA KOMPUTASI:
+    165 total run (5 model x 11 temuan x 3 run x ~2 kondisi) pada hardware
+    CPU-only 16GB RAM sudah memakan waktu eksekusi signifikan (orde jam);
+    n=10 misalnya akan mengalikan waktu eksekusi 3,3x.
+
+    Namun, fungsi confidence_variance/stdev dalam penelitian ini TIDAK
+    digunakan untuk klaim inferensial formal ("model X signifikan lebih
+    stabil dari model Y dengan p<0.05") -- melainkan sebagai INDIKATOR
+    DESKRIPTIF EKSPLORATIF untuk mengidentifikasi pola kasar (mis. "apakah
+    confidence model ini berfluktuasi liar antar run yang identik, atau
+    relatif konsisten"). Klaim utama penelitian (SVR, FCR, similarity
+    score) dihitung dari METRIK YANG DIVERIFIKASI OBJEKTIF (php -l, regex
+    format check, difflib) yang TIDAK bergantung pada n besar untuk valid
+    -- satu file yang lolos/gagal php -l adalah fakta biner, bukan estimasi
+    statistik. n=3 untuk variance/stdev secara eksplisit ditandai sebagai
+    "indikasi awal", dengan rekomendasi n>=10 untuk penelitian lanjutan
+    yang berfokus pada analisis variabilitas.
+
+-------------------------------------------------------------------------------
+
+Q10: Similarity score 0,9214 dihitung dengan `difflib.SequenceMatcher`
+     (Ratcliff/Obershelp) yang berbasis KESAMAAN STRING/BARIS. Untuk kode
+     program, dua file bisa SECARA FUNGSIONAL IDENTIK tapi SECARA TEKSTUAL
+     berbeda signifikan (urutan parameter, penamaan variabel, gaya
+     formatting). Mengapa tidak menggunakan metrik yang AWARE terhadap
+     STRUKTUR KODE seperti CodeBLEU, AST diff, atau metrik berbasis
+     tree-edit-distance?
+
+A10: Ini adalah keterbatasan yang valid -- difflib mengukur KEMIRIPAN
+     TEKSTUAL/SINTAKSIS PERMUKAAN, bukan EKUIVALENSI SEMANTIK. Pemilihan
+     difflib didasarkan pada tiga pertimbangan:
+
+     1. KESEDERHANAAN & ZERO-DEPENDENCY: difflib adalah modul standar
+        Python, tidak memerlukan instalasi tambahan (CodeBLEU memerlukan
+        tree-sitter parser khusus PHP yang dukungannya kurang matang
+        dibanding Python/Java/C++ -- bahasa-bahasa yang menjadi fokus
+        riset CodeBLEU asli).
+
+     2. KONTEKS PENGGUNAAN: similarity score di sini BUKAN untuk menilai
+        kebenaran fungsional kode AI (itu peran SVR via php -l), melainkan
+        untuk memvalidasi bahwa OUTPUT RECTOR (transformasi sintaksis
+        otomatis berbasis AST) tidak menyimpang jauh secara struktural
+        dari hasil konversi manual/referensi. Karena Rector sendiri
+        beroperasi di level AST dengan transformasi yang RELATIF
+        MEKANIS (penggantian fungsi deprecated, penambahan type hint),
+        perbedaan tekstual antara output Rector dan referensi manual
+        UMUMNYA MEMANG mencerminkan perbedaan substantif (bukan hanya
+        gaya) -- dan satu-satunya outlier (skor 0,70-0,80) memang
+        terverifikasi SECARA MANUAL sebagai perbedaan gaya (spasi, urutan
+        atribut), bukan kesalahan logika.
+
+     3. SAMPEL KECIL MEMUNGKINKAN VERIFIKASI MANUAL: karena hanya 24 file
+        yang divalidasi, setiap skor similarity (termasuk outlier) dapat
+        DIPERIKSA MANUAL satu per satu -- sehingga difflib berfungsi
+        sebagai "alarm/penyaring kasar" untuk mengarahkan perhatian
+        peneliti, bukan sebagai metrik final yang berdiri sendiri tanpa
+        verifikasi manusia.
+
+     Diakui bahwa untuk validasi skala besar (ratusan/ribuan file),
+     metrik AST-aware akan diperlukan -- ini dicatat sebagai arah
+     pengembangan lanjutan.
+
+-------------------------------------------------------------------------------
+
+Q11: SVR (Syntax Validity Rate) dihitung dengan `php -l`, yang HANYA
+     memeriksa parse error, bukan FATAL ERROR runtime (mis. pemanggilan
+     fungsi yang tidak ada, type error). Qwen mencapai SVR 100% -- apakah
+     ada kemungkinan kode yang "100% valid sintaks" tersebut sebenarnya
+     akan CRASH saat dieksekusi karena memanggil fungsi/class yang tidak
+     ada dalam konteks aslinya?
+
+A11: Kemungkinan ini SANGAT NYATA dan merupakan salah satu temuan paling
+     penting untuk diakui secara jujur di sidang. `php -l` memvalidasi
+     GRAMMAR (apakah token-token membentuk struktur PHP yang sah secara
+     sintaksis) -- ia TIDAK melakukan symbol resolution, type checking,
+     atau eksekusi. Kode seperti:
+
+         $stmt = $pdo->prepare(...);  // $pdo tidak pernah didefinisikan
+                                       // dalam snippet 2000-karakter
+
+     akan LOLOS php -l (sintaksisnya sempurna) tapi akan menghasilkan
+     `Error: Call to a member function prepare() on null` saat dieksekusi,
+     karena AI menghasilkan kode perbaikan menggunakan PDO padahal kode
+     asli FT UGM menggunakan Active Record CodeIgniter (`$this->db->...`)
+     -- AI tidak punya visibilitas terhadap variable scope di luar
+     snippet 2000 karakter.
+
+     Ini SECARA EKSPLISIT diakui sebagai keterbatasan terbesar SVR sebagai
+     metrik primer -- dan justru menjadi DASAR mengapa Bab V merekomendasikan
+     bahwa SVR=100% TIDAK BOLEH diinterpretasikan sebagai "kode siap
+     deploy", melainkan sebagai "kode KANDIDAT yang lolos GERBANG PERTAMA
+     (tidak ada syntax error) dan layak masuk REVIEW MANUSIA". Pengujian
+     fungsional/dynamic testing (mis. menjalankan kode dalam sandbox
+     CodeIgniter yang sebenarnya dan memverifikasi tidak ada fatal error)
+     secara eksplisit DI LUAR SCOPE penelitian ini (lihat Batasan Penelitian
+     di CLAUDE.md: "Static analysis saja, tidak ada dynamic/aktif testing")
+     dan menjadi rekomendasi #1 untuk penelitian lanjutan.
+
+===============================================================================
+D. PERTANYAAN KONSEPTUAL / KRITIS LEVEL TINGGI
+===============================================================================
+
+Q12: Jika harus memilih ANTARA "model dengan SVR tinggi tapi confidence
+     tidak terkalibrasi" (Qwen) VS "model dengan confidence terkalibrasi
+     tapi SVR rendah" -- mana yang LEBIH BERBAHAYA dalam konteks SISTEM
+     KEAMANAN PRODUKSI, dan mengapa?
+
+A12: Model dengan SVR rendah TAPI confidence terkalibrasi (misalnya,
+     model yang melaporkan confidence rendah TEPAT ketika kodenya rusak)
+     SEBENARNYA LEBIH AMAN untuk sistem produksi -- meskipun tidak ada
+     model dalam eksperimen ini yang menunjukkan kombinasi tersebut.
+     Kondisi paling berbahaya yang DITEMUKAN justru CodeLlama: confidence
+     TINGGI (0,91) dengan SVR RENDAH (27-39%) -- ini adalah kombinasi
+     "PERCAYA DIRI TAPI SALAH", yang dalam literatur keamanan AI disebut
+     "confidently wrong" atau miskalibrasi overconfident.
+
+     Bahayanya konkret: jika sistem produksi menggunakan threshold
+     confidence (mis. "auto-apply fix jika confidence > 0.8, else flag
+     untuk review manusia") sebagai gerbang otomatisasi -- model seperti
+     CodeLlama akan melewati gerbang tersebut (confidence 0,91 > 0,8) PADAHAL
+     >60% kodenya rusak, sehingga kode RUSAK ter-AUTO-APPLY tanpa review.
+     Sebaliknya, Qwen yang TIDAK PERNAH melaporkan confidence numerik
+     (selalu 0,0) akan SELALU di-flag untuk review manusia -- "fail-safe
+     by omission": ketiadaan confidence justru memaksa human-in-the-loop,
+     meski kodenya sebenarnya 100% valid sintaksis.
+
+     Implikasi desain sistem: penelitian ini merekomendasikan TIDAK PERNAH
+     menggunakan confidence self-reported sebagai SATU-SATUNYA gerbang
+     otomatisasi -- SVR (atau metrik objektif lain seperti php -l, hasil
+     test suite) harus menjadi gerbang WAJIB independen dari confidence,
+     terlepas seberapa tinggi confidence yang dilaporkan model.
+
+-------------------------------------------------------------------------------
+
+Q13: Penelitian ini menggunakan PROMPT ENGINEERING, bukan FINE-TUNING
+     (sesuai batasan CLAUDE.md). Secara konseptual, APA YANG SECARA
+     FUNDAMENTAL TIDAK BISA DICAPAI prompt engineering dibanding
+     fine-tuning/LoRA untuk use-case ini -- dan mengapa keterbatasan
+     tersebut DAPAT DITERIMA untuk skripsi ini?
+
+A13: Secara fundamental, prompt engineering memengaruhi DISTRIBUSI OUTPUT
+     model dengan mengondisikan CONTEXT (apa yang model "lihat" sebelum
+     menghasilkan token berikutnya) -- tapi tidak mengubah BOBOT/PARAMETER
+     model itu sendiri. Akibatnya, ada batas hard-cap pada apa yang bisa
+     dicapai:
+
+     1. Prompt engineering TIDAK BISA mengajarkan model POLA SPESIFIK
+        CodeIgniter 3 yang TIDAK ADA atau UNDERREPRESENTED dalam data
+        pretraining -- jika model tidak pernah "melihat" cukup contoh
+        `$this->db->query()` -> PDO/Query Builder selama pretraining,
+        tidak ada instruksi prompt yang bisa membuat model menghasilkan
+        transformasi tersebut dengan andal. Fine-tuning/LoRA pada korpus
+        CodeIgniter 3 -> 8.x bisa secara LANGSUNG menanamkan pola ini ke
+        bobot model.
+
+     2. Prompt engineering TIDAK BISA memperbaiki MISKALIBRASI CONFIDENCE
+        (temuan CodeLlama di Q12) -- kalibrasi confidence adalah PROPERTI
+        EMERGEN dari proses training (RLHF/DPO), bukan sesuatu yang bisa
+        "diinstruksikan" via prompt. Prompt hanya bisa mengubah FORMAT
+        pelaporan confidence, bukan AKURASI-nya.
+
+     3. Prompt engineering DIBATASI MAX_CODE_CHARS/context window -- model
+        yang di-fine-tune dengan teknik seperti RAG-aware training bisa
+        belajar "meminta konteks tambahan" secara proaktif, sesuatu yang
+        tidak bisa dicapai dengan instruksi statis.
+
+     Keterbatasan ini DAPAT DITERIMA untuk skripsi ini karena: (a) fine-
+     tuning memerlukan DATASET BERPASANGAN (kode rusak -> kode benar)
+     berskala ribuan contoh yang TIDAK TERSEDIA untuk kasus spesifik
+     CodeIgniter 3 FT UGM/DTI -- membuat dataset semacam itu adalah
+     penelitian tersendiri; (b) fine-tuning memerlukan resource komputasi
+     (GPU dengan VRAM besar) yang di luar batasan hardware penelitian
+     (16GB RAM, no dedicated GPU); (c) prinsip "no fine-tuning" konsisten
+     dengan prinsip privasi data -- fine-tuning pada kode FT UGM/DTI akan
+     "menanamkan" karakteristik kode institusi tersebut ke dalam bobot
+     model, menciptakan risiko privasi baru yang tidak ada pada prompt
+     engineering (di mana kode hanya ada sesaat dalam context window dan
+     tidak persisten). Ini secara eksplisit menjadi rekomendasi penelitian
+     lanjutan: LoRA fine-tuning pada korpus migrasi PHP yang lebih besar
+     dan generik (bukan spesifik FT UGM/DTI) untuk menghindari masalah
+     privasi sambil tetap meningkatkan kemampuan domain-spesifik.
+
+-------------------------------------------------------------------------------
+
+Q14: Pemetaan ISO/IEC 27001:2022 menggunakan rule-based keyword matching
+     (`iso_mapper.py`), sementara AI Engine menggunakan LLM untuk
+     rekomendasi perbaikan. Secara konseptual, mengapa tidak ada INTERAKSI
+     antara kedua komponen ini -- misalnya, AI Engine menerima KONTROL ISO
+     sebagai bagian dari prompt (seperti yang terlihat di kode), tapi
+     APAKAH OUTPUT AI PERNAH DIVALIDASI APAKAH BENAR-BENAR MEMENUHI KONTROL
+     ISO TERSEBUT, atau hanya "disebutkan" dalam teks?
+
+A14: Ini adalah pengamatan yang sangat tajam dan jujurnya menyingkap GAP
+     dalam desain sistem saat ini. Memang benar: kontrol ISO (mis. "A.8.28")
+     dikirim ke LLM sebagai BAGIAN DARI PROMPT (lihat `_build_prompt()`,
+     baris "ISO/IEC 27001:2022 Controls: {controls_str}") dengan harapan
+     model "menyesuaikan" rekomendasinya dengan prinsip kontrol tersebut
+     -- TAPI tidak ada langkah verifikasi PASCA-GENERASI yang memeriksa
+     apakah `suggested_fix` BENAR-BENAR mengimplementasikan kontrol
+     tersebut secara substantif, atau hanya menyebut "ISO 27001 A.8.28"
+     dalam teks penjelasan tanpa konsekuensi nyata pada kode yang
+     dihasilkan.
+
+     Dengan kata lain, pemetaan ISO dalam pipeline ini beroperasi pada DUA
+     LEVEL YANG TERPISAH: (1) `iso_mapper.py` memetakan TEMUAN SEMGREP ke
+     kontrol ISO secara DETERMINISTIK dan TERVERIFIKASI (karena berbasis
+     rule eksplisit yang bisa diaudit baris-per-baris) -- ini adalah
+     KLAIM YANG VALID dan menjadi kontribusi utama kerangka kerja; (2)
+     penyertaan kontrol ISO dalam prompt AI Engine berfungsi sebagai
+     "framing kontekstual" untuk membantu model memahami JENIS
+     pertimbangan keamanan yang relevan -- TAPI TIDAK ADA JAMINAN bahwa
+     output AI benar-benar SESUAI kontrol tersebut. Validasi kepatuhan ISO
+     pada level (2) akan memerlukan rule tambahan yang memeriksa SUGGESTED
+     FIX itu sendiri (mis. apakah fix untuk A.8.28/SQL Injection benar-
+     benar menggunakan prepared statement, bukan sekadar `addslashes()`).
+
+     Ini perlu DIKLARIFIKASI secara jujur di sidang sebagai BATASAN: klaim
+     "pemetaan ISO 27001" dalam skripsi ini berlaku KUAT untuk LAPISAN
+     TEMUAN (Semgrep -> kontrol), tapi LEMAH/BELUM TERVERIFIKASI untuk
+     LAPISAN REKOMENDASI AI (kontrol -> apakah fix AI benar-benar
+     compliant). Ini menjadi rekomendasi pengembangan: tambahkan langkah
+     VALIDASI POST-HOC yang memeriksa apakah `suggested_fix` mengandung
+     pola yang sesuai kontrol (mis. regex check untuk prepared statement
+     pada kontrol A.8.28), menutup loop antara rekomendasi AI dan kepatuhan
+     yang dapat diverifikasi.
+
+-------------------------------------------------------------------------------
+
+Q15: Bayangkan FT UGM benar-benar mengadopsi pipeline ini dan menjalankan
+     `run_llm_comparison` setiap kali ada update kode. Dalam jangka
+     panjang, model-model open-source (Qwen2.5-Coder, dll) akan terus
+     dirilis versi baru. Bagaimana arsitektur pipeline ini menghadapi
+     MODEL DRIFT -- yaitu, kemungkinan bahwa hasil eksperimen (mis. "Qwen
+     SVR 100%") TIDAK BERLAKU LAGI untuk Qwen3 atau versi quantization baru?
+
+A15: Pipeline saat ini TIDAK memiliki mekanisme deteksi model drift secara
+     otomatis -- `OLLAMA_MODEL` dan `COMPARISON_MODELS` adalah KONSTANTA
+     HARDCODED di `ai_engine.py` (baris 44-53) yang merujuk versi spesifik
+     ("qwen2.5-coder:7b", dll). Jika institusi meng-upgrade ke "qwen3:7b",
+     pipeline akan tetap berjalan (Ollama API kompatibel), TAPI ASUMSI
+     "model ini menghasilkan SVR 100%" yang mendasari keputusan desain
+     (mis. PRIORITY_THRESHOLD, MAX_CODE_CHARS) tidak lagi tervalidasi untuk
+     model baru tersebut TANPA RE-RUN eksperimen perbandingan.
+
+     Secara arsitektural, pipeline ini DIRANCANG MODULAR justru untuk
+     mengantisipasi hal ini: `run_llm_comparison()` adalah FUNGSI YANG
+     DAPAT DIJALANKAN ULANG dengan parameter `models=[...]` yang berbeda
+     kapan saja -- sehingga "re-validasi terhadap model baru" adalah
+     OPERASI YANG SUDAH DIDUKUNG SECARA STRUKTURAL, hanya belum
+     DIOTOMATISASI (mis. belum ada cron job atau trigger otomatis saat
+     `ollama pull` mendeteksi versi baru).
+
+     Namun, secara KONSEPTUAL, ini menyentuh keterbatasan FUNDAMENTAL
+     penelitian berbasis model generatif: KESIMPULAN PENELITIAN INI
+     BERSIFAT SNAPSHOT IN TIME -- valid untuk versi model spesifik yang
+     diuji pada periode penelitian (dicatat dengan tag versi eksplisit
+     untuk reproducibility, sesuai diskusi di pertanyaan Bab III/IV). Ini
+     BUKAN kelemahan unik penelitian ini, melainkan karakteristik INHEREN
+     dari riset evaluasi LLM secara umum (benchmark seperti HumanEval pun
+     terus diperbarui karena model lama "saturate" benchmark lama). Yang
+     bisa dan SUDAH dilakukan: (1) mencatat versi model + checksum/digest
+     image Ollama untuk reproducibility, (2) merancang pipeline agar
+     RE-EVALUASI murah secara operasional (tinggal jalankan ulang
+     `run_llm_comparison` dengan model baru), (3) mendokumentasikan SVR
+     dan FCR sebagai METRIK YANG HARUS DIPANTAU BERKALA, bukan keputusan
+     final permanen -- ini eksplisit menjadi bagian dari rekomendasi
+     operasional di Bab V untuk adopsi jangka panjang oleh FT UGM.
+
+===============================================================================
+E. PERTANYAAN TAMBAHAN DARI TEMAN (RAMA) -- AST, RECTOR, PHPSTAN, METRIK
+===============================================================================
+
+Q16: Rector bekerja berdasarkan AST. Apa bedanya mengubah kode pakai AST
+     dengan find-and-replace / regex biasa?
+
+A16: AST (Abstract Syntax Tree) merepresentasikan kode sebagai POHON
+     STRUKTUR yang mencerminkan TATA BAHASA PHP -- setiap node punya TIPE
+     SEMANTIK eksplisit (FuncCall, Variable, ClassMethod, StringLiteral,
+     Comment, dst). Rector (via PHP-Parser) bisa menargetkan "panggilan
+     fungsi bernama mysql_connect dengan N argumen" sebagai NODE SPESIFIK,
+     terlepas dari spasi, line break, atau penulisan ulang. Yang lebih
+     penting: AST SECARA OTOMATIS MENGABAIKAN teks yang identik tapi BUKAN
+     KODE -- mis. string `"mysql_connect()"` di dalam komentar atau
+     dokumentasi TIDAK akan ikut terganti, karena node-nya bertipe
+     StringLiteral/Comment, bukan FuncCall.
+
+     Regex/find-replace bekerja murni pada TEKS MENTAH tanpa pemahaman
+     konteks: ia tidak bisa membedakan `mysql_query(` yang merupakan
+     PEMANGGILAN FUNGSI sungguhan vs yang muncul di dalam string/komentar/
+     heredoc; ia kesulitan menangani konstruksi MULTI-BARIS atau nested
+     parentheses yang tidak seragam formatnya; dan SATU SALAH KETIK pola
+     regex bisa merusak SELURUH FILE menjadi tidak valid secara sintaks
+     tanpa peringatan apapun. AST menjamin OUTPUT TETAP KODE PHP YANG VALID
+     SECARA STRUKTURAL karena hasil transformasi di-PRINT ULANG dari pohon
+     yang valid -- regex tidak punya jaminan semacam itu sama sekali.
+
+-------------------------------------------------------------------------------
+
+Q17: Kalau AST seakurat itu, kenapa alat secanggih Rector tetap GAGAL
+     melakukan refactor ekstensi mysql_* sampai-sampai perlu dibantu AI?
+
+A17: Karena transformasi berbasis AST pada dasarnya adalah PEMETAAN
+     SINTAKSIS 1:1 (atau pola tetap N:1) yang HARUS DIRANCANG DI MUKA oleh
+     pembuat rule -- ia bisa "mengganti nama node FuncCall dari A ke B",
+     tapi tidak bisa MENCIPTAKAN INFORMASI BARU yang tidak ada dalam pohon.
+     Migrasi `mysql_*` ke `mysqli_*`/PDO BUKAN sekadar penggantian nama
+     fungsi: `mysql_query($sql)` memakai KONEKSI GLOBAL IMPLISIT,
+     sedangkan `mysqli_query($conn, $sql)` atau `PDO::prepare()` memerlukan
+     OBJEK KONEKSI EKSPLISIT yang harus "DITEMUKAN" atau bahkan "DIBUAT"
+     dalam scope yang sesuai -- Rector tidak bisa MENALAR variabel mana di
+     scope tersebut yang merepresentasikan koneksi DB, atau bagaimana
+     MENG-THREAD-kan variabel itu melewati pemanggilan fungsi. Ini
+     memerlukan PEMAHAMAN INTENT/ALUR DATA, bukan sekadar pencocokan
+     struktur sintaksis -- itulah sebabnya Rector sendiri menandai banyak
+     rule migrasi `mysql_*` sebagai "risky"/dihapus dari ruleset default,
+     karena butuh penilaian manusia.
+
+     Posisi AI dalam pipeline ini BUKAN menggantikan Rector -- Rector tetap
+     menangani transformasi MEKANIS/SINTAKSIS dengan conversion rate
+     91,7%-97,6%. AI diberi peran khusus untuk LAPISAN SEMANTIK/KEAMANAN
+     (sanitasi, parameterisasi query) yang memerlukan penalaran tentang
+     ALUR DATA dan KONTEKS PENGGUNAAN -- persis batas yang dijelaskan oleh
+     temuan ΔF=0 (Rector mengubah sintaks, tidak memperbaiki kerentanan
+     semantik).
+
+-------------------------------------------------------------------------------
+
+Q18: Snippet ke LLM dibatasi 2000 karakter pertama untuk menyesuaikan
+     context window. Bagaimana kalau di file PHP 10.000 baris, variabel
+     yang vulnerable DIDEKLARASIKAN di baris 50, tapi TITIK INJEKSI-nya
+     ada di baris 3000? AI cuma melihat 2000 karakter -- yang menurutmu
+     hanya mencakup deklarasi variabel, bukan eksekusinya. Apa yang akan
+     dilakukan AI?
+
+A18: Perlu diluruskan satu hal teknis penting: `code_snippet` yang dikirim
+     ke AI Engine BUKAN diambil dari AWAL FILE, melainkan dari LOKASI
+     TEMUAN SEMGREP -- yaitu TITIK INJEKSI/SINK (baris 3000 dalam contoh
+     ini), karena Semgrep mendeteksi pola berbahaya PADA TITIK PENGGUNAAN,
+     bukan pada deklarasi. Jadi secara desain, AI MELIHAT KONTEKS DI
+     SEKITAR SINK (baris 3000), BUKAN deklarasi di baris 50.
+
+     Konsekuensinya: AI TIDAK TAHU dari mana variabel itu berasal atau
+     apakah sudah divalidasi sebelumnya di baris 50 -- AI hanya tahu "di
+     sini, variabel ini dipakai dengan cara yang tidak aman". Karena tidak
+     punya bukti validasi sebelumnya, perilaku AI yang PALING MUNGKIN
+     adalah memperlakukan variabel sebagai TIDAK TERPERCAYA SECARA DEFAULT
+     dan merekomendasikan PENGAMANAN DI TITIK PEMAKAIAN ITU SENDIRI (mis.
+     `htmlspecialchars()` untuk XSS, prepared statement untuk SQLi,
+     `realpath()`/whitelist untuk path traversal). Ini SECARA KEBETULAN
+     SEJALAN dengan praktik secure coding standar (OWASP): sanitasi/
+     encoding HARUS dilakukan DI TITIK OUTPUT/QUERY CONSTRUCTION (defense
+     at the sink), bukan hanya mengandalkan validasi di titik input yang
+     bisa saja terlewat di jalur kode lain.
+
+     Tapi ada keterbatasan nyata yang harus diakui:
+     1. TIDAK ADA TAINT ANALYSIS LINTAS-BARIS/LINTAS-FILE -- jika variabel
+        yang sama dipakai TIDAK AMAN di BANYAK TEMPAT lain dalam file
+        10.000 baris itu, AI HANYA memperbaiki SATU SINK yang dilaporkan
+        Semgrep untuk temuan tersebut; sink lain butuh TEMUAN SEMGREP
+        TERPISAH dan analisis AI TERPISAH -- tidak ada propagasi "perbaiki
+        di satu tempat, otomatis aman di semua tempat".
+     2. AI bisa saja merekomendasikan sanitasi yang SECARA TEKNIS REDUNDAN
+        (jika baris 50 ternyata SUDAH memvalidasi) -- tidak berbahaya,
+        tapi menunjukkan AI "tidak tahu" riwayat variabel.
+     Ini konsisten dengan batasan scope yang dinyatakan di CLAUDE.md:
+     "static analysis saja", per-temuan/per-snippet, BUKAN whole-program
+     dataflow analysis -- dan menjadi rekomendasi pengembangan lanjutan
+     (interprocedural taint tracking sebelum snippet dikirim ke AI).
+
+-------------------------------------------------------------------------------
+
+Q19a: PHPStan dijalankan di level 5. Parameter teknis apa yang membedakan
+      PHPStan level 0, level 5, dan level 9?
+
+A19a: Level PHPStan bersifat KUMULATIF (level N mencakup semua pemeriksaan
+      level N-1, ditambah pemeriksaan baru):
+
+      - LEVEL 0: pemeriksaan dasar -- kelas/fungsi/method yang TIDAK
+        DIKENALI (unknown class/function/method), basic dead-code (mis.
+        `instanceof` yang selalu false), variabel yang jelas-jelas tidak
+        terdefinisi.
+      - LEVEL 5 (default penelitian ini): MENAMBAHKAN pemeriksaan TIPE
+        ARGUMEN yang dikirim ke method/fungsi (apakah tipe argumen cocok
+        dengan signature parameter), serta pemeriksaan TIPE NILAI BALIK
+        (return type) terhadap deklarasi -- ini level yang dianggap
+        "balanced strictness": cukup ketat untuk menangkap masalah type-
+        safety yang RELEVAN untuk migrasi PHP 7->8 (mis. parameter nullable
+        implisit yang dihapus di PHP 8.1+), tapi belum memaksa SETIAP
+        ekspresi punya tipe eksplisit.
+      - LEVEL 9 (maksimum): TIDAK MENGIZINKAN tipe `mixed` IMPLISIT sama
+        sekali (`checkExplicitMixed`) -- SETIAP property, parameter, return
+        value, dan ekspresi HARUS punya tipe yang bisa di-resolve PHPStan
+        secara eksplisit; property bertipe yang belum diinisialisasi di
+        constructor dianggap error; ketidaksesuaian tipe generik/template
+        dianggap error. Pada level ini, PHPStan pada dasarnya menerapkan
+        DISIPLIN TIPE SEKETAT BAHASA STATIS (mirip TypeScript `strict:
+        true`).
+
+-------------------------------------------------------------------------------
+
+Q19b: Kalau aplikasi ini menyangkut keamanan institusi yang mengejar ISO
+      27001, kenapa tidak sekalian pakai level maksimal (level 9)?
+
+A19b: Karena arsitektur CodeIgniter 3 SECARA FUNDAMENTAL TIDAK KOMPATIBEL
+      dengan disiplin tipe level 9 -- CI3 mengandalkan MAGIC PROPERTY
+      (`$this->db`, `$this->load`, `$this->session`, dst, di-resolve lewat
+      `__get()` saat runtime) dan KONSTANTA GLOBAL yang didefinisikan
+      runtime oleh `index.php` (`APPPATH`, `BASEPATH`, `ENVIRONMENT`).
+      PHPStan level 5 SAJA sudah menghasilkan 354 (FT UGM) dan 318 (DTI)
+      error yang harus DIFILTER sebagai NOISE FRAMEWORK (lihat
+      `_CI3_NOISE_SUBSTRINGS` di analyzer.py) -- pada level 9, HAMPIR
+      SETIAP BARIS yang menyentuh `$this->db`, `$this->load`, dst akan
+      menghasilkan error "mixed tidak diizinkan", melipatgandakan noise
+      ini menjadi RIBUAN error TAMBAHAN yang SAMA SEKALI TIDAK
+      ACTIONABLE tanpa menulis STUB FILE khusus untuk seluruh base class
+      CI3 terlebih dahulu (sebuah proyek tersendiri).
+
+      Dari sudut pandang ISO 27001 sendiri, A.8.29 menekankan pengujian
+      keamanan yang menghasilkan TEMUAN YANG DAPAT DITINDAKLANJUTI DAN
+      DIAUDIT -- laporan dengan RIBUAN error noise yang TIDAK MUNGKIN
+      DIPERBAIKI (karena merupakan KETERBATASAN ARSITEKTUR FRAMEWORK, bukan
+      bug aplikasi) justru KONTRAPRODUKTIF: ia menciptakan ALERT FATIGUE,
+      di mana temuan SUNGGUHAN (2.790/2.354 error level 5 yang relevan)
+      akan TENGGELAM di antara noise level 9 yang jauh lebih besar. Level
+      5 dipilih sebagai TITIK KESEIMBANGAN antara KETAT dan ACTIONABLE
+      untuk codebase legacy framework-heavy. Level 9 secara eksplisit
+      direkomendasikan sebagai PENGEMBANGAN LANJUTAN -- SETELAH dibuatkan
+      PHPStan stub files untuk base class CI3 (pola umum:
+      `phpstan/phpstan-strict-rules` + custom CI3 stubs).
+
+-------------------------------------------------------------------------------
+
+Q20: Pada rumus FCR, kepatuhan diukur dari kemunculan baris
+     "CONFIDENCE: N". Kalau sebuah LLM merespons dengan FORMAT 100%
+     SEMPURNA tapi kode PHP-nya SALAH TOTAL, apakah FCR-nya tetap tinggi?
+     Kalau iya, apa ARTI MATEMATIS angka FCR itu BAGI PENGGUNA di dunia
+     nyata?
+
+A20: Ya, FCR-nya tetap tinggi -- dan ini BUKAN bug, melainkan DEFINISI
+     METRIKNYA YANG MEMANG SEMPIT. `_check_format_valid()` (dan
+     `format_compliance_rate` di laporan) HANYA mengevaluasi:
+     "apakah regex `CONFIDENCE[^0-9\n]*?(\d{1,3})` MENEMUKAN MATCH dalam
+     teks respons?" -- regex ini SAMA SEKALI TIDAK MELIHAT isi
+     `suggested_fix` atau `explanation`. Sebuah model bisa menulis
+     `<?php $sql = "SELECT * FROM users WHERE id=" . $_GET['id'];\nCONFIDENCE: 95`
+     (kode SAMA PERSIS dengan kerentanan asli, TIDAK DIPERBAIKI SAMA
+     SEKALI) dan tetap mendapat FCR=100%.
+
+     ARTI MATEMATIS FCR bagi pengguna: FCR = P(sebuah SISTEM OTOMATIS yang
+     mem-PARSE output model dengan REGEX TERTENTU akan BERHASIL
+     MENGEKSTRAK angka confidence). Dengan kata lain, FCR menjawab
+     pertanyaan REKAYASA/INTEGRASI ("apakah PARSER saya akan BERHASIL
+     atau MENGEMBALIKAN NILAI DEFAULT 0,0?"), BUKAN pertanyaan KUALITAS
+     ("apakah KODE-nya BENAR?"). Inilah TEPATNYA mengapa FCR dan SVR
+     SENGAJA DIPERLAKUKAN SEBAGAI DUA SUMBU INDEPENDEN (lihat
+     docs/sidang-judul-qa.md bagian A, Q1) -- dan mengapa REKOMENDASI
+     MODEL DIDASARKAN PADA SVR, BUKAN FCR. FCR yang tinggi TANPA SVR
+     tinggi TIDAK MEMBERI NILAI APAPUN bagi pengguna akhir; sebaliknya
+     SVR tinggi TANPA FCR tinggi (kasus Qwen) MASIH memberi nilai --
+     KODE-nya BENAR, hanya PARSING METADATA-nya yang perlu fallback.
+
+-------------------------------------------------------------------------------
+
+Q21: Qwen2.5-Coder direkomendasikan karena SVR sampai 100%. Andai model
+     merespons SEMUA temuan SQL Injection dengan kode kosong
+     `<?php echo 'Aman'; ?>` -- perintah `php -l` akan tetap menyatakan
+     itu SYNTAX VALID. Karena tidak ada pengujian fungsional, bagaimana
+     pertanggungjawabannya?
+
+A21: Skenario ini BENAR SECARA MATEMATIS -- SVR=100% adalah KONDISI PERLU
+     (necessary) TAPI BUKAN KONDISI CUKUP (sufficient) untuk "kode benar".
+     Model "degenerate" yang SELALU mengeluarkan placeholder yang TERLIHAT
+     AMAN akan TETAP mendapat SVR=100% karena `php -l` memang HANYA
+     memeriksa GRAMMAR, bukan RELEVANSI/KEBENARAN.
+
+     Pertanggungjawaban yang dilakukan dalam penelitian ini ADA TIGA
+     LAPIS, namun harus diakui SEBAGIAN BERSIFAT MANUAL/KUALITATIF:
+
+     1. KLAIM TIDAK OVERCLAIM -- rekomendasi Qwen secara eksplisit
+        diformulasikan sebagai "lolos GERBANG PERTAMA (kode dapat
+        dieksekusi/dieksekusi tanpa parse error)", BUKAN "kode Qwen sudah
+        BENAR dan SIAP PAKAI" (lihat docs/sidang-judul-qa.md Q1: "kode
+        yang dapat dieksekusi" sebagai PRASYARAT, bukan tujuan akhir).
+
+     2. VERIFIKASI KUALITATIF MANUAL -- opsi `save_raw_responses=True`
+        (`run_llm_comparison`, `capture_responses.py`) menyimpan TEKS
+        MENTAH respons Qwen untuk SETIAP temuan. Respons-respons ini
+        ditinjau MANUAL untuk memastikan Qwen BENAR-BENAR menghasilkan
+        kode SUBSTANTIF YANG RELEVAN dengan jenis kerentanan (mis. kode
+        `PDO::prepare()`/`bindParam()` untuk temuan SQL Injection,
+        `realpath()`/validasi whitelist untuk SSRF) -- BUKAN placeholder
+        generik seperti `echo 'Aman'`. Pemeriksaan inilah yang menjadi
+        DASAR KUALITATIF di balik klaim "Qwen tetap mengerjakan tugas
+        utama" (lihat docs/sidang-judul-qa.md Q2).
+
+     3. KETERBATASAN YANG DIAKUI -- pemeriksaan #2 BERSIFAT MANUAL, BELUM
+        DIOTOMATISASI dalam pipeline `llm_quality_checker.py`. Skenario
+        "echo 'Aman'" yang Anda gambarkan TIDAK TERJADI pada Qwen
+        berdasarkan tinjauan manual tersebut, TAPI pipeline OTOMATIS SAAT
+        INI TIDAK AKAN MENDETEKSI skenario itu jika TERJADI di masa depan
+        (mis. pada model lain atau versi Qwen baru). REKOMENDASI
+        PENGEMBANGAN LANJUTAN: tambahkan "SEMANTIC RELEVANCE CHECK"
+        otomatis -- mis. untuk `vuln_type="SQL Injection"`, periksa apakah
+        `suggested_fix` mengandung token yang relevan secara keamanan
+        (`prepare`, `bindParam`, `PDO`, `?` placeholder); untuk
+        `vuln_type="Path Traversal"/SSRF`, periksa `realpath`,
+        `basename`, whitelist pattern -- dikombinasikan dengan SVR sebagai
+        GERBANG GANDA yang lebih sulit dikalahkan oleh output degenerate.
+
+-------------------------------------------------------------------------------
+
+Q22: Untuk similarity score, dipakai algoritma Ratcliff/Obershelp
+     (`difflib.SequenceMatcher`). Padahal di rekayasa data ada cosine
+     similarity atau Levenshtein distance. Kenapa pakai Ratcliff/Obershelp?
+
+A22: Pemilihan didasarkan pada KARAKTERISTIK SPESIFIK data yang
+     dibandingkan: dua versi FILE PHP YANG HAMPIR IDENTIK, di mana
+     SEBAGIAN BESAR BARIS SAMA PERSIS dan PERBEDAAN TERLOKALISASI pada
+     beberapa statement yang DIUBAH Rector. Untuk konteks ini:
+
+     - COSINE SIMILARITY mengharuskan teks diubah jadi VEKTOR (bag-of-
+       words/TF-IDF/embedding) terlebih dahulu. Representasi bag-of-words
+       BERSIFAT ORDER-INVARIANT -- ia kehilangan informasi URUTAN yang
+       SANGAT PENTING untuk kode (`$a = $b + $c;` vs `$a = $b - $c;` bisa
+       punya cosine similarity TINGGI karena token dominannya `$a`,`$b`,`$c`
+       sama, padahal SECARA LOGIKA PROGRAM keduanya BERLAWANAN). Cosine
+       cenderung MENG-OVERESTIMATE kemiripan untuk perbedaan token kecil
+       yang SECARA SEMANTIK KRITIKAL.
+
+     - LEVENSHTEIN DISTANCE menghitung jumlah operasi edit (insert/delete/
+       substitute) PER KARAKTER/TOKEN secara POSISIONAL. Masalahnya:
+       jika SATU BLOK KODE (misal satu fungsi) BERPINDAH POSISI tapi
+       ISINYA SAMA, Levenshtein menghitung itu sebagai "hapus blok di
+       posisi lama + sisipkan blok di posisi baru" -- BIAYA EDIT besar
+       untuk PERUBAHAN YANG SEBENARNYA NOL SECARA INFORMASI. Levenshtein
+       cenderung MENG-UNDERESTIMATE kemiripan untuk konten yang
+       TERSUSUN ULANG.
+
+     - RATCLIFF/OBERSHELP (via `difflib.SequenceMatcher`, beroperasi per
+       BARIS dalam implementasi ini) mencari BLOK-BLOK SUBSEKUENS YANG
+       COCOK SECARA REKURSIF (longest matching block, lalu rekursi ke
+       kiri/kanan dari blok itu) -- ia bisa MENGENALI BARIS-BARIS YANG
+       SAMA PERSIS DI POSISI BERBEDA sebagai "cocok" tanpa memerlukan
+       KESELARASAN POSISI seperti Levenshtein, dan TIDAK KEHILANGAN
+       INFORMASI URUTAN seperti cosine. Hasilnya secara intuitif setara
+       dengan "berapa persen baris yang sama persis antara dua file" --
+       interpretasi yang SELARAS dengan cara `git diff`/reviewer manusia
+       membaca perubahan, dan COCOK untuk skenario "dua file yang MAYORITAS
+       SAMA, beberapa baris berubah" -- yaitu PERSIS skenario Rector vs
+       referensi.
+
+-------------------------------------------------------------------------------
+
+Q23: Jelaskan SECARA MATEMATIS kenapa Ratcliff/Obershelp punya keunggulan
+     dibanding Levenshtein/cosine untuk kasus ini.
+
+A23: Ratcliff/Obershelp menghitung similarity = 2M / T, di mana M = total
+     jumlah elemen (baris) yang berhasil dicocokkan melalui pencocokan
+     SUBSEKUENS TERPANJANG SECARA REKURSIF, dan T = jumlah total elemen di
+     KEDUA sequence (T = len(a) + len(b)). Ini ekuivalen dengan KOEFISIEN
+     DICE yang diterapkan pada HIMPUNAN ELEMEN YANG COCOK.
+
+     Bandingkan secara matematis:
+
+     1. LEVENSHTEIN: similarity_lev = 1 - d(a,b)/max(len(a), len(b)),
+        dengan d(a,b) = jumlah MINIMUM operasi edit POSISIONAL. Untuk
+        BLOK k BARIS yang BERPINDAH dari posisi i ke posisi j (i != j),
+        d(a,b) BERTAMBAH SEKITAR 2k (hapus k elemen di posisi lama,
+        sisipkan k elemen di posisi baru) -- PADAHAL secara informasi,
+        BLOK ITU TIDAK BERUBAH SAMA SEKALI (0 perbedaan KONTEN). Akibatnya
+        similarity_lev TURUN SIGNIFIKAN untuk kasus reorder, MESKI
+        kontennya identik -- UNDERESTIMATE.
+
+     2. RATCLIFF/OBERSHELP: pencocokan SUBSEKUENS TERPANJANG TIDAK
+        MENSYARATKAN POSISI YANG SAMA -- blok k baris yang berpindah TETAP
+        DITEMUKAN sebagai "matching block" di MANAPUN ia berada di kedua
+        sequence, sehingga TETAP MENYUMBANG 2k ke nilai M. Similarity
+        TIDAK TURUN akibat reorder murni -- LEBIH AKURAT
+        merepresentasikan "berapa banyak KONTEN yang benar-benar sama".
+
+     3. COSINE pada bag-of-words: cos(theta) = (A . B) / (|A| |B|), di
+        mana A, B adalah vektor frekuensi term. Karena REPRESENTASI INI
+        TIDAK MENYIMPAN URUTAN/POSISI SAMA SEKALI, DUA BARIS DENGAN TOKEN
+        SAMA TAPI SUSUNAN/OPERATOR BERBEDA (`$a=$b+$c` vs `$a=$b-$c`,
+        hanya 1 dari 4 token berbeda) menghasilkan cos(theta) MENDEKATI 1
+        -- padahal SATU TOKEN ITU (`+` vs `-`) MENGUBAH SELURUH PERILAKU
+        PROGRAM. Cosine OVEResTIMATE kemiripan untuk perbedaan token yang
+        JUMLAHNYA KECIL TAPI DAMPAKNYA BESAR.
+
+     Dengan kata lain: 2M/T milik Ratcliff/Obershelp SENSITIF terhadap
+     PERBEDAAN LOKAL PER-BARIS (setiap baris yang TIDAK SAMA PERSIS GAGAL
+     masuk M, langsung menurunkan skor -- TIDAK SEPERTI cosine yang bisa
+     "memaafkan" perbedaan token kecil), TAPI TIDAK TERTIPU oleh
+     PERPINDAHAN POSISI BLOK YANG IDENTIK (TIDAK SEPERTI Levenshtein).
+     Untuk kasus SPESIFIK "membandingkan dua file PHP hasil transformasi
+     AST yang mayoritas identik dengan beberapa baris berubah", kombinasi
+     sifat ini PALING DEKAT dengan PERSEPSI "persen baris yang sama" yang
+     relevan secara PRAKTIS.
+
+     PENTING UNTUK DIAKUI SECARA JUJUR: ini adalah JUSTIFIKASI REKAYASA
+     berdasarkan KARAKTERISTIK BENTUK DATA pada KASUS INI (file hampir
+     identik, perbedaan baris-lokal) -- BUKAN klaim bahwa Ratcliff/
+     Obershelp SECARA UMUM/UNIVERSAL "lebih unggul secara matematis"
+     dibanding Levenshtein atau cosine untuk SEMUA kasus perbandingan
+     teks. Untuk kasus lain (mis. membandingkan dua IMPLEMENTASI BERBEDA
+     dari fungsi yang SAMA SECARA SEMANTIK tapi DITULIS ULANG TOTAL),
+     metrik berbasis AST/embedding seperti CodeBLEU akan LEBIH TEPAT --
+     ini sejalan dengan keterbatasan yang sudah diakui di bagian C, Q10.
+
+-------------------------------------------------------------------------------
+
+Q24: Skripsi ini untuk comply audit ISO/IEC 27001:2022. Kontrol A.8.29
+     "Security Testing in Development" -- tapi pipeline pengujianmu
+     memindai KODE LAWAS YANG SUDAH BERJALAN DI PRODUCTION dengan Semgrep,
+     lalu diklaim memetakan ke A.8.29. Apa justifikasinya?
+
+A24: Justifikasinya bertumpu pada DEFINISI "DEVELOPMENT" dan "RELEASE"
+     dalam KONTEKS PROYEK INI. Deskripsi A.8.29 di `iso_mapper.py` sendiri
+     berbunyi: "Security testing activities during development and
+     pre-deployment ... validates that security requirements are met
+     before release." Dalam penelitian ini, "development" yang dimaksud
+     ADALAH PROYEK MIGRASI ITU SENDIRI -- kode legacy di `input/` BUKAN
+     "produk akhir", melainkan BAHAN BAKU/INPUT bagi AKTIVITAS
+     PENGEMBANGAN (migrasi ke PHP 8.x), dan "release" yang dimaksud ADALAH
+     PELEPASAN HASIL MIGRASI di `output/`. Memindai `input/` dengan Semgrep
+     ADALAH BAGIAN dari SDLC migrasi tersebut -- ia membentuk BASELINE
+     KEAMANAN SEBELUM transformasi dilakukan.
+
+     Ini SEKALIGUS justifikasi metodologis untuk metrik ΔF (delta
+     findings): TANPA memindai kode "before" (yang BERJALAN DI PRODUCTION),
+     TIDAK ADA cara untuk MENGUKUR apakah migrasi MEMPERBAIKI, TIDAK
+     MENGUBAH, atau JUSTRU MEMPERBURUK postur keamanan -- pengujian
+     before/after INI SENDIRI ADALAH BENTUK "security testing in
+     development" untuk PROYEK MIGRASI, sesuai semangat A.8.29: "validates
+     that security requirements [of the migration output] are met before
+     release [of the migrated codebase]".
+
+     Yang perlu diakui secara jujur sebagai CATATAN INTERPRETASI: A.8.29
+     dalam pembacaan PALING KETAT sering dipahami sebagai pengujian
+     keamanan TERINTEGRASI DALAM SDLC BERJALAN (mis. SAST/DAST otomatis di
+     CI/CD untuk SETIAP commit fitur baru) -- menerapkannya pada SCAN
+     RETROSPEKTIF SATU KALI terhadap kode legacy adalah INTERPRETASI YANG
+     DIADAPTASI untuk KONTEKS PROYEK MIGRASI (one-off modernization
+     project), BUKAN untuk SDLC operasional berkelanjutan. Ini adalah
+     POSISI INTERPRETATIF skripsi yang perlu DINYATAKAN SECARA EKSPLISIT,
+     dan menjadi DASAR REKOMENDASI: jika pipeline ini diadopsi
+     BERKELANJUTAN oleh FT UGM (bukan sekali migrasi), barulah ia
+     SEPENUHNYA memenuhi A.8.29 dalam pengertian SDLC operasional (lihat
+     juga Q15 di bagian D, soal model drift dan re-evaluasi berkala).
+
+-------------------------------------------------------------------------------
+
+Q25: Pipeline-nya Semgrep -> Rector -> PHPStan -> AI Engine. Bagaimana jika
+     AI Engine memberi rekomendasi perbaikan untuk temuan Semgrep yang
+     SECARA SINTAKS VALID (lolos `php -l`), tapi perbaikan itu memakai
+     TIPE DATA YANG SALAH sehingga muncul TypeError BARU jika dicek ulang
+     dengan PHPStan? Karena AI Engine berjalan SETELAH PHPStan, apakah
+     lolos begitu saja? Tidak ada validasi ulang?
+
+A25: Pengamatan ini BENAR dan mengidentifikasi GAP NYATA dalam pipeline
+     saat ini. Memang benar urutan eksekusi di `main.py` adalah Semgrep ->
+     Rector -> PHPStan -> AI Engine (AI Engine = Step 5/terakhir) --
+     sehingga `suggested_fix` yang dihasilkan AI Engine TIDAK PERNAH
+     DIANALISIS ULANG oleh PHPStan. Skenario yang Anda gambarkan --
+     `suggested_fix` lolos `php -l` (sintaks valid) tapi, MISALNYA,
+     mengoper nilai bertipe `string|null` ke parameter bertipe `string`
+     (yang AKAN ditangkap PHPStan level 5 jika di-scan) -- SECARA TEKNIS
+     MUNGKIN TERJADI dan TIDAK AKAN TERDETEKSI oleh pipeline saat ini.
+
+     Ada dua hal yang membatasi DAMPAK gap ini, tapi TIDAK MENGHILANGKANNYA:
+
+     1. `suggested_fix` berstatus REKOMENDASI/SARAN dalam LAPORAN
+        (`reports/`), BUKAN PERUBAHAN YANG OTOMATIS DITULIS ke `output/`.
+        Posisinya ADVISORY -- ditujukan untuk DITINJAU MANUSIA sebelum
+        diterapkan. AI Engine berjalan sebagai TAHAP ANALISIS PARALEL
+        terhadap TEMUAN SEMGREP (bukan tahap yang MEMODIFIKASI kode hasil
+        Rector/PHPStan).
+
+     2. NAMUN, jika REVIEWER MANUSIA MENERAPKAN `suggested_fix` ke
+        `output/`, TIDAK ADA LANGKAH OTOMATIS yang MENJALANKAN ULANG
+        `php -l` + PHPStan TERHADAP FILE YANG SUDAH DITAMBAL untuk
+        memvalidasi bahwa PENERAPAN tersebut TIDAK MEMPERKENALKAN error
+        baru. Ini adalah CELAH YANG DIAKUI dan menjadi REKOMENDASI
+        PENGEMBANGAN PRIORITAS: tambahkan tahap "POST-APPLICATION
+        VALIDATION" -- setelah `suggested_fix` diterapkan (oleh manusia
+        atau, di masa depan, semi-otomatis), jalankan ULANG `php -l` DAN
+        PHPStan level 5 PADA FILE YANG SUDAH DITAMBAL (bukan hanya
+        snippet) sebagai GERBANG SEBELUM commit -- menutup loop yang saat
+        ini terbuka antara "AI memberi saran" dan "saran itu valid dalam
+        konteks FILE UTUH".
+
+-------------------------------------------------------------------------------
+
+Q26: 354 error PHPStan di FT UGM dan 318 di DTI difilter sebagai NOISE
+     murni dari magic property CodeIgniter 3. Bagaimana kalau ada developer
+     menyisipkan MAGIC PROPERTY/KONSTANTA GLOBAL PALSU yang SENGAJA dibuat
+     sebagai BACKDOOR? Bukannya filter hardcoded ini malah MELOLOSKAN itu?
+
+A26: Pertanyaan ini menyasar KEAMANAN ALAT ANALISISNYA SENDIRI -- valid dan
+     penting. Mari periksa MEKANISME FILTER-nya secara konkret:
+     `_CI3_NOISE_SUBSTRINGS` di `analyzer.py` adalah DAFTAR TETAP berisi
+     SUBSTRING SPESIFIK seperti `"::$db."`, `"::$load."`, `"::$session."`,
+     `"Constant APPPATH not found"`, `"Function base_url not found"`, dst
+     -- INI ADALAH NAMA-NAMA PROPERTY/KONSTANTA/FUNGSI BAWAAN CodeIgniter 3
+     YANG SUDAH DIDOKUMENTASIKAN SECARA RESMI oleh framework, BUKAN pola
+     generik seperti "abaikan SEMUA error magic property apapun namanya".
+
+     Implikasinya: agar sebuah PROPERTY/KONSTANTA BACKDOOR PALSU IKUT
+     TERFILTER, NAMA-nya HARUS PERSIS SAMA dengan salah satu nama
+     RESERVED CI3 di atas (mis. attacker harus menamai property
+     backdoor-nya `$this->db`, `$this->load`, dst, atau membuat fungsi
+     bernama `base_url`/`form_open`). Jika attacker melakukan ITU, maka:
+     (a) property/fungsi tersebut akan BENTROK/MENIMPA fungsionalitas CI3
+     YANG SAH (sangat mencolok dan kemungkinan besar akan MERUSAK aplikasi
+     -- mudah terdeteksi via testing fungsional), dan (b) PENAMAAN SEPERTI
+     ITU SANGAT MENCURIGAKAN dalam code review manual (`$this->db` dipakai
+     untuk hal selain akses database). Jika attacker memakai NAMA LAIN
+     (mis. `$this->backdoor_handler`), filter `_is_ci3_noise()` TIDAK AKAN
+     COCOK -- PHPStan TETAP MELAPORKAN "Access to undefined property" SEPERTI
+     BIASA, TIDAK TERFILTER.
+
+     PENTING JUGA: filter ini HANYA memengaruhi KLASIFIKASI NOISE di
+     `analyzer.py` (PHPStan) -- ia TIDAK MEMENGARUHI Semgrep (`scanner.py`),
+     yang memindai POLA KEAMANAN (mis. `eval()`, `system()`, hardcoded
+     credential, dst) SECARA INDEPENDEN dan TIDAK TUNDUK pada filter ini
+     sama sekali. Backdoor yang menyamar sebagai magic property CI3 MASIH
+     HARUS lolos dari Semgrep secara TERPISAH.
+
+     Meski demikian, KRITIK STRUKTURAL Anda TETAP VALID: filter ini
+     bekerja BERDASARKAN ISI PESAN ERROR (substring matching pada teks
+     pesan), TANPA memperhatikan PATH FILE tempat error muncul. Idealnya,
+     filter "noise CI3" SEHARUSNYA DIBATASI hanya untuk error yang muncul
+     pada file-file di bawah `system/` (kode INTI framework yang memang
+     tidak dianalisis), BUKAN diterapkan SECARA GLOBAL ke seluruh
+     `application/` berdasarkan ISI PESAN SAJA. Karena daftar substring ini
+     ada di REPOSITORY OPEN-SOURCE (publik), SECARA TEORITIS seseorang BISA
+     MEMBACA daftar ini dan MERANCANG NAMA yang persis cocok untuk
+     menyembunyikan error dari LAPORAN PHPStan (meski, sekali lagi, harus
+     bentrok dengan nama reserved CI3 yang akan mencolok). REKOMENDASI
+     PERBAIKAN: tambahkan FILTER BERBASIS PATH (hanya terapkan noise filter
+     untuk pesan yang merujuk file di `system/`) sebagai LAPISAN KEDUA,
+     bukan hanya berbasis isi pesan.
+
+-------------------------------------------------------------------------------
+
+Q27: Di Bab IV, SEMUA kerentanan dari Semgrep berasal dari
+     `system/core/Output.php`, file BAWAAN INTI CodeIgniter 3. Best
+     practice software engineering MELARANG memodifikasi file CORE
+     FRAMEWORK. Lalu kenapa AI memberi REKOMENDASI PERBAIKAN untuk file
+     framework itu, padahal modifikasinya akan HILANG saat framework
+     di-update?
+
+A27: Ini KRITIK YANG SAH terhadap SCOPE REKOMENDASI AI, dan perlu dijawab
+     jujur. AI Engine BEKERJA PADA TINGKAT TEMUAN SEMGREP -- ia menjawab
+     pertanyaan "BAGAIMANA kode di LOKASI INI seharusnya ditulis agar
+     aman", BUKAN pertanyaan ARSITEKTURAL "DI MANA SEBAIKNYA perubahan ini
+     DITERAPKAN dalam struktur proyek". Karena Semgrep menemukan
+     kerentanan DI `system/core/Output.php` (baris 768 untuk SQLi, 10
+     lokasi lain untuk SSRF), `code_snippet` yang dikirim ke AI memang
+     berasal dari file tersebut -- AI menunjukkan PERUBAHAN KODE APA yang
+     menutup celah PADA SNIPPET ITU, TANPA mengklaim "lakukan edit ini
+     LANGSUNG di system/core/Output.php pada deployment produksi".
+
+     Skripsi TIDAK MENGKLAIM bahwa hasil rekomendasi AI harus DITERAPKAN
+     dengan CARA MENG-EDIT `system/` SECARA LANGSUNG. Dalam praktik
+     CodeIgniter 3 yang benar, ada pola RESMI untuk kasus ini: CI3
+     mendukung CORE CLASS EXTENSION/OVERRIDE -- membuat
+     `application/core/MY_Output.php` yang `extends CI_Output` dan
+     MENG-OVERRIDE method spesifik yang bermasalah. Perubahan di
+     `application/core/` TIDAK PERNAH TERTIMPA saat `system/` di-update,
+     karena CI3 me-load `MY_*` class SETELAH base class `system/`.
+
+     Yang HARUS DIAKUI sebagai GAP: PROMPT AI Engine SAAT INI TIDAK
+     MENYERTAKAN INSTRUKSI tentang "DI MANA/BAGAIMANA fix ini sebaiknya
+     DITERAPKAN agar tidak melanggar prinsip jangan-modifikasi-core" --
+     output AI Engine adalah PERBAIKAN KODE PADA LEVEL SNIPPET, dan
+     KEPUTUSAN DEPLOYMENT (`MY_Output.php` override vs lainnya) DISERAHKAN
+     SEPENUHNYA ke MANUSIA. Ini secara eksplisit menjadi REKOMENDASI
+     PENGEMBANGAN: untuk temuan yang berlokasi di `system/`, prompt AI
+     Engine bisa DIPERLUAS untuk SECARA EKSPLISIT menyarankan POLA
+     CORE-EXTENSION CI3 (`application/core/MY_<ClassName>.php`) sebagai
+     CARA PENERAPAN, bukan hanya "kode pengganti"-nya saja.
+
+-------------------------------------------------------------------------------
+
+Q28: Untuk file yang gagal dikonversi (`captcha_helper.php`,
+     `form_helper.php`), disebutkan penyebabnya bug `FiberNodeScopeResolver`
+     bawaan Rector. Apakah ada KONTRIBUSI untuk MENGAKALI bug tersebut,
+     selain dilabeli FAILED?
+
+A28: Jujur: TIDAK ADA PATCH/WORKAROUND AKTIF yang dikontribusikan ke
+     Rector/PHP-Parser dalam penelitian ini -- memperbaiki bug internal
+     Rector (yang berada di level resolusi scope AST untuk konstruksi
+     Fiber PHP 8.1+) adalah PROYEK REKAYASA PERANGKAT LUNAK TERSENDIRI di
+     luar scope skripsi (static analysis & migrasi, bukan pengembangan
+     tooling Rector).
+
+     Mitigasi yang DITERAPKAN dalam pipeline: (1) file yang GAGAL TETAP
+     DISALIN APA ADANYA ke `output/` -- pipeline TIDAK BERHENTI dan TIDAK
+     KEHILANGAN file; (2) kegagalan DICATAT dengan PESAN ERROR SPESIFIK
+     untuk keperluan reproduksi/diagnosis. OPSI LAIN yang DIPERTIMBANGKAN
+     tapi TIDAK DIAMBIL: (a) menjalankan KHUSUS 2 file ini dengan VERSI
+     RECTOR LEBIH LAMA yang belum punya bug tersebut -- DITOLAK karena akan
+     melanggar prinsip "satu versi Rector konsisten untuk reproducibility"
+     yang berlaku untuk SELURUH 245/326 file; (b) konversi MANUAL untuk 2
+     file ini -- DIPERTIMBANGKAN feasible (hanya 2 file helper kecil),
+     TAPI TIDAK DILAKUKAN karena kedua file adalah HELPER FRAMEWORK CI3
+     (bukan logika aplikasi custom) yang RISIKO RENDAH bila tetap
+     PHP 7.4-compatible berjalan di atas PHP 8.3 (CodeIgniter 3 helper
+     umumnya backward-compatible).
+
+     Ini diakui sebagai KETERBATASAN dan menjadi REKOMENDASI KONKRET untuk
+     pengembangan lanjutan: (1) MELAPORKAN bug `FiberNodeScopeResolver` ini
+     ke MAINTAINER RECTOR (kontribusi open-source yang baik dan REALISTIS
+     dilakukan setelah skripsi), dan (2) MENJALANKAN ULANG kedua file
+     tersebut begitu VERSI RECTOR YANG SUDAH DIPERBAIKI tersedia.
+
+-------------------------------------------------------------------------------
+
+Q29: Eksperimen Kondisi A (zero-shot) GAGAL di MAYORITAS model, sehingga
+     Kondisi B TERPAKSA merancang OPTIMASI PROMPT MANUAL PER MODEL.
+     Bukannya ini menunjukkan ada GAP dalam OTOMASI PIPELINE, dan membuatnya
+     TIDAK SCALABLE?
+
+A29: Ada DUA SUDUT PANDANG yang perlu dipisahkan: TUJUAN RISET vs
+     KEBUTUHAN PRODUKSI.
+
+     Sebagai RISET: Kondisi A dan B BUKAN dua "konfigurasi produksi" yang
+     HARUS SAMA-SAMA scalable. Kondisi A adalah BASELINE TERKONTROL yang
+     menjawab "bagaimana KEMAMPUAN ALAMI 5 model ini terhadap prompt yang
+     IDENTIK". Kondisi B adalah EKSPLORASI "seberapa jauh prompt
+     engineering bisa MENOLONG, dan apakah caranya SAMA untuk semua model".
+     TEMUAN bahwa Kondisi B MEMERLUKAN STRATEGI BERBEDA PER MODEL (dan
+     bahkan GAGAL untuk Mistral) ADALAH HASIL RISET ITU SENDIRI -- ia
+     MEMBUKTIKAN secara empiris bahwa TEKNIK PROMPT ENGINEERING TIDAK
+     TRANSFERABLE ANTAR MODEL kecil-menengah, sejalan dengan literatur
+     yang dikutip. Jika SEMUA strategi B berhasil seragam, justru itu yang
+     akan MENCURIGAKAN (overfitting).
+
+     Sebagai PRODUKSI: pipeline PRODUKSI (`PHPAIEngine` di `ai_engine.py`,
+     `OLLAMA_MODEL` default `"qwen2.5-coder:7b"`) TIDAK PERLU mendukung
+     SEMUA 5 MODEL SEKALIGUS. Setelah Qwen2.5-Coder DIPILIH berdasarkan
+     hasil perbandingan, pipeline produksi HANYA menggunakan SATU PROMPT
+     YANG SUDAH DI-TUNE untuk SATU MODEL (`_build_prompt()`/
+     `_build_fim_prompt()` -- format plain-text + `CONFIDENCE:` di akhir,
+     hasil pembelajaran dari Kondisi A/B). "Tuning per-model" adalah BIAYA
+     SATU KALI di tahap RISET/PEMILIHAN MODEL, BUKAN BIAYA BERULANG di
+     OPERASIONAL HARIAN.
+
+     Yang TETAP PERLU DIAKUI sebagai PERTIMBANGAN JANGKA PANJANG: jika
+     institusi NANTI ingin GANTI MODEL (mis. ke Qwen3 ketika rilis), biaya
+     "tuning ulang prompt" akan MUNCUL LAGI SEKALI -- ini terkait dengan isu
+     MODEL DRIFT yang sudah dibahas di bagian D (Q15), dan menjadi alasan
+     mengapa `run_llm_comparison()` dirancang sebagai FUNGSI YANG BISA
+     DIJALANKAN ULANG kapan saja, bukan one-off script.
+
+-------------------------------------------------------------------------------
+
+Q30: Argumennya sistem ini harus jalan LOKAL (CPU/RAM 16GB tanpa GPU
+     diskrit) demi PRIVASI. Bagaimana kalau FT UGM minta pipeline ini
+     diintegrasikan ke CI/CD runner kampus (mis. GitHub Actions self-hosted)
+     yang jalan di SERVER CPU BIASA tanpa GPU diskrit -- apakah sistem ini
+     MASIH RELEVAN atau jadi BOTTLENECK?
+
+A30: Perlu diluruskan dulu satu hal: spesifikasi hardware penelitian ini
+     (CLAUDE.md: "OS Windows 11, RAM 16GB") TIDAK MENYEBUTKAN GPU SAMA
+     SEKALI -- artinya seluruh eksperimen SUDAH BERJALAN CPU-ONLY sejak
+     awal. Jadi "CPU tanpa GPU diskrit" BUKAN KONDISI BARU, melainkan
+     KONDISI YANG SUDAH DIUJI.
+
+     Secara TEKNIS, integrasi ke GitHub Actions self-hosted runner di
+     server CPU kampus FEASIBLE -- Ollama berjalan native di CPU
+     (`ollama serve` tidak mensyaratkan GPU). PRINSIP PRIVASI JUSTRU
+     SEMAKIN KUAT dalam skenario ini: self-hosted runner di JARINGAN KAMPUS
+     berarti kode TETAP TIDAK PERNAH MENINGGALKAN INFRASTRUKTUR INSTITUSI --
+     argumen "no external API" TETAP VALID TERLEPAS ADA/TIDAKNYA GPU. Jadi
+     dari sisi PRIVASI: TETAP RELEVAN, TIDAK BERUBAH.
+
+     BOTTLENECK YANG SESUNGGUHNYA adalah LATENSI INFERENSI, bukan privasi.
+     Dari hasil `mean_inference_time_sec` pada eksperimen CPU-only,
+     inferensi per-request berada pada ORDE PULUHAN DETIK. Jika AI Engine
+     dijalankan untuk SETIAP TEMUAN priority<=5 pada SETIAP PUSH/PR (bisa
+     puluhan temuan), total waktu CI/CD bisa mencapai ORDE MENIT HINGGA
+     PULUHAN MENIT -- berpotensi MELEBIHI SLA CI/CD TIPIKAL (umumnya
+     target <10 menit per run), sehingga BISA MENJADI BOTTLENECK jika
+     AI Engine dijadikan GERBANG WAJIB (blocking) sebelum merge.
+
+     MITIGASI yang relevan untuk skenario ini (REKOMENDASI
+     PENGEMBANGAN, belum diimplementasikan):
+     1. Jadikan tahap AI Engine NON-BLOCKING/ASYNC -- Semgrep, Rector,
+        PHPStan (cepat, deterministik) tetap GERBANG WAJIB CI; AI Engine
+        berjalan sebagai JOB TERPISAH yang memposting hasil sebagai
+        KOMENTAR PR (advisory), TIDAK menahan proses merge.
+     2. Batasi AI Engine HANYA pada temuan di BARIS YANG BERUBAH pada PR
+        tersebut (diff-aware), bukan SELURUH CODEBASE -- mengurangi volume
+        request secara drastis.
+     3. Jalankan AI Engine secara TERJADWAL (mis. nightly/weekly batch),
+        bukan PER-COMMIT -- konsisten dengan sifatnya sebagai ANALISIS
+        TAMBAHAN, bukan GATE WAJIB SETIAP PERUBAHAN.
+
+     Kesimpulannya: SISTEM TETAP RELEVAN (properti privasi-lokal terjaga),
+     tapi memerlukan ADAPTASI ARSITEKTUR PIPELINE (async/selective) agar
+     TIDAK MENJADI BOTTLENECK -- ini adalah PERTIMBANGAN DEPLOYMENT
+     PRODUKSI yang secara eksplisit DI LUAR SCOPE PROOF-OF-CONCEPT skripsi
+     ini, namun DIDOKUMENTASIKAN sebagai arah pengembangan.
+
+-------------------------------------------------------------------------------
+
+Q31: Untuk SVR, rumusnya `valid / extracted` (`c_valid / c_extracted`),
+     BUKAN dibagi `total_runs`. Jadi kalau sebuah model HANYA BERHASIL
+     MENGEKSTRAK 3 blok kode dari 33 percobaan, tapi KETIGANYA VALID, SVR-
+     nya TETAP 100%. Bukannya rumus ini MENUTUPI FAILURE RATE -- model
+     dicoba 100 kali, yang berhasil di-ekstrak cuma 1 tapi valid, SVR tetap
+     100%?
+
+A31: SECARA MATEMATIS, pernyataan Anda BENAR -- `syntax_validity_rate =
+     agg_valid / agg_extracted` (lihat `llm_quality_checker.py`) adalah
+     METRIK BERSYARAT (CONDITIONAL): "GIVEN bahwa model BERHASIL
+     mengekstrak blok kode, seberapa sering blok itu valid sintaksis".
+     Skenario "3 dari 33 percobaan menghasilkan kode, ketiganya valid ->
+     SVR=100%" dan "33 dari 33 menghasilkan kode, 33 valid -> SVR=100%"
+     MEMANG MENGHASILKAN ANGKA SVR YANG SAMA, PADAHAL HASIL PRAKTISNYA
+     SANGAT BERBEDA.
+
+     PERTAHANAN-nya: SVR TIDAK PERNAH dilaporkan/dibaca SENDIRIAN. Pipeline
+     SECARA PARALEL menghitung `extraction_rate = agg_extracted /
+     agg_total_runs` (juga di `llm_quality_checker.py`, dalam `summary`
+     YANG SAMA dengan SVR) -- skenario "3/33 ekstraksi" akan langsung
+     TERLIHAT dari `extraction_rate = 9%` yang DITAMPILKAN BERDAMPINGAN
+     dengan SVR=100% pada TABEL/laporan yang sama. Pasangan
+     (extraction_rate, SVR) berfungsi MIRIP (recall, precision): SVR =
+     "DARI YANG DICOBA, berapa persen BERHASIL"; extraction_rate =
+     "berapa SERING model BAHKAN MENCOBA". Membaca SALAH SATU SAJA memang
+     bisa MENYESATKAN -- KEDUANYA HARUS DIBACA BERSAMA.
+
+     NAMUN, KRITIK ANDA TETAP BERHARGA sebagai SARAN PERBAIKAN PRESENTASI:
+     jika ada pembaca yang HANYA melihat KOLOM SVR di tabel ringkasan
+     (tanpa memperhatikan extraction_rate di sebelahnya), ia BISA
+     TERTIPU. SOLUSI MATEMATIS YANG ELEGAN: karena
+     `valid/total = (valid/extracted) x (extracted/total)` (chain rule),
+     bisa ditambahkan SATU METRIK GABUNGAN -- "Overall Success Rate =
+     SVR x extraction_rate" -- sebagai ANGKA TUNGGAL yang TIDAK BISA
+     "DIMENANGKAN" hanya dengan ekstraksi rendah. Ini BELUM ADA dalam
+     laporan saat ini dan menjadi MASUKAN KONKRET YANG LANGSUNG BISA
+     DITERAPKAN sebagai perbaikan sebelum sidang.
+
+-------------------------------------------------------------------------------
+
+Q32: Rumus FCR itu BINER. Kalau Qwen2.5-Coder memberi respons kode
+     perbaikan yang 100% SEMPURNA dan LOGIS, tapi LUPA menulis kata
+     "CONFIDENCE:" di baris terakhir, rumusnya kasih FCR=0%. Tapi kan TIDAK
+     MASUK AKAL secara EVALUASI SISTEM ENGINEERING -- AI yang kasih KODE
+     RUSAK tapi PATUH FORMAT (CodeLlama) dinilai 100%, sementara AI yang
+     kasih KODE AMAN dinilai 0% HANYA karena MASALAH PEMFORMATAN STRING
+     BIASA?
+
+A32: Kalau FCR diperlakukan sebagai SKOR KUALITAS BERDIRI SENDIRI, Anda
+     BENAR -- urutan "CodeLlama (FCR 100%) > Qwen (FCR 0%)" akan TERBALIK
+     dan ABSURD dari sudut pandang SEORANG ENGINEER yang INGIN KODE YANG
+     BENAR. TAPI ini PERSIS POIN YANG SENGAJA DIANGKAT skripsi sebagai
+     TEMUAN, BUKAN sebagai kelemahan yang luput diperhatikan (lihat
+     docs/sidang-judul-qa.md bagian A, Q1) -- KONTRAS "CodeLlama FCR
+     100%/SVR 27% vs Qwen FCR 0%/SVR 100%" SENGAJA DITAMPILKAN
+     BERDAMPINGAN UNTUK MENUNJUKKAN bahwa KEPATUHAN FORMAT dan KUALITAS
+     KODE TIDAK BERKORELASI (bahkan BERLAWANAN ARAH) pada model kelas ini
+     -- dan KARENA ITU rekomendasi DIDASARKAN PADA SVR, BUKAN FCR. Jika
+     pertanyaan ini muncul di sidang, justru itu KONFIRMASI bahwa pembaca
+     MEMAHAMI ARGUMEN UTAMA skripsi dengan TEPAT.
+
+     Ada SATU NUANSA TAMBAHAN yang memperkuat argumen "SVR > FCR" secara
+     REKAYASA SISTEM: "Qwen lupa menulis CONFIDENCE:" adalah masalah yang
+     MURAH untuk DIAKALI -- sistem hilir CUKUP memperlakukan KETIADAAN
+     baris CONFIDENCE sebagai "tidak ada self-rating, default ke REVIEW
+     MANUSIA" (fail-safe, lihat Q12 bagian D) -- KODE-nya SENDIRI (yang
+     merupakan DELIVERABLE SEBENARNYA) TETAP BISA DIPAKAI. Sebaliknya,
+     "CodeLlama menulis PHP yang RUSAK SECARA SINTAKS" TIDAK ADA CARA
+     MURAH untuk diakali -- KODE adalah DELIVERABLE-nya, dan KODE RUSAK
+     TIDAK BISA "DIPOST-PROCESS" menjadi BENAR. ASIMETRI INI -- masalah
+     FORMAT itu MURAH untuk direkayasa-ulang, masalah ISI/KONTEN TIDAK --
+     adalah ALASAN FUNDAMENTAL kenapa SVR (isi) HARUS LEBIH BERAT
+     daripada FCR (format) dalam keputusan akhir, TERLEPAS dari betapapun
+     "tidak masuk akal"-nya FCR=0% UNTUK Qwen TERLIHAT JIKA DIBACA
+     SENDIRIAN.
+
+-------------------------------------------------------------------------------
+
+Q33: Variansi confidence itu interpretasinya untuk apa? Misalnya kalau
+     suatu model punya SKOR KEPERCAYAAN TINGGI, VARIANSI KECIL, tapi
+     KODE-nya BANYAK YANG RUSAK (kasus CodeLlama) -- bukannya itu artinya
+     SAMA SAJA dengan MENGUKUR SEBERAPA KONSISTEN KODE-nya BERHALUSINASI?
+     INSIGHT dari variansi ini APA?
+
+A33: Framing "mengukur konsistensi halusinasi" itu SEBENARNYA SANGAT TEPAT
+     -- bahkan LEBIH PRESISI daripada cara variansi/stdev biasanya
+     dibingkai. Insight UTAMA dari variance/stdev BUKAN "apakah model
+     BAGUS", melainkan: "apakah MISKALIBRASI model bersifat SISTEMATIS/BIAS
+     YANG STABIL, atau ACAK/TIDAK BERPOLA?"
+
+     - VARIANSI RENDAH + CONFIDENCE TINGGI + SVR RENDAH (CodeLlama):
+       artinya model SECARA KONSISTEN/BERULANG-ULANG melaporkan dirinya
+       YAKIN, PADAHAL SECARA KONSISTEN PULA kodenya SERING RUSAK -- bias
+       overconfidence-nya STABIL, bukan kebetulan satu run. Implikasi
+       praktis: bias yang STABIL secara TEORITIS BISA DIKOREKSI dengan
+       FAKTOR KALIBRASI TETAP (mis. "kurangi confidence CodeLlama ~60 poin
+       persentase secara konsisten") -- TAPI skripsi TIDAK MENEMPUH jalan
+       ini karena SVR sudah cukup sebagai dasar keputusan.
+
+     - VARIANSI TINGGI (jika ditemukan pada model lain): berarti
+       SELF-ASSESSMENT model BERUBAH-UBAH SECARA LIAR meski KONDISI
+       IDENTIK (prompt sama, temperature 0,1) -- mengindikasikan
+       confidence yang dilaporkan TIDAK MEREFLEKSIKAN APAPUN YANG STABIL,
+       lebih dekat ke NOISE SAMPLING TOKEN daripada SINYAL (bahkan SINYAL
+       YANG BIAS SEKALIPUN).
+
+     Jadi variansi adalah DIAGNOSTIK LAPIS KEDUA DI ATAS temuan utama
+     (confidence tidak terkalibrasi, bagian D Q12/Q13 awal) -- ia menjawab
+     "apakah ketidak-kalibrasi itu PREDIKTABEL atau KACAU". Dan justru
+     temuan "CodeLlama: variansi rendah + confidence tinggi + SVR rendah"
+     adalah PROFIL PALING BERBAHAYA untuk OTOMATISASI: confidence yang
+     SELALU TINGGI DAN STABIL akan TERLIHAT "DAPAT DIPERCAYA" oleh
+     ENGINEER yang memantau sistem dari LUAR (tidak ada fluktuasi yang
+     memicu kecurigaan) -- padahal justru STABILITAS itu MENYEMBUNYIKAN
+     bahwa SINYALNYA SECARA SISTEMATIS SALAH. Sebaliknya, model dengan
+     confidence YANG BERFLUKTUASI LIAR setidaknya akan "TERLIHAT TIDAK
+     RELIABLE" dan memicu kehati-hatian.
+
+     Diakui secara jujur (konsisten dengan bagian C, Q9): dengan n=3,
+     angka variansi/stdev SAAT INI bersifat INDIKATIF/EKSPLORATIF, BELUM
+     CUKUP UNTUK KLAIM STATISTIK FORMAL tentang "STABILITAS BIAS" --
+     framing "konsistensi halusinasi" yang Anda usulkan adalah ARAH
+     INTERPRETASI YANG TEPAT untuk PENELITIAN LANJUTAN dengan n LEBIH
+     BESAR (n>=10), di mana variansi BISA DIUJI SECARA STATISTIK sebagai
+     INDIKATOR BIAS SISTEMATIS vs NOISE.
+
+===============================================================================
+F. PERTANYAAN PENUTUP / REFLEKTIF
+===============================================================================
+
+Q34: Apa TEMUAN TERPENTING dari penelitianmu?
+
+A34: Temuan terpenting adalah PEMISAHAN dan PEMBUKTIAN bahwa KEPATUHAN
+     FORMAT (FCR), KEPERCAYAAN DIRI MODEL (confidence self-reported), dan
+     KUALITAS KODE AKTUAL (SVR) adalah TIGA SUMBU YANG SALING INDEPENDEN --
+     bahkan bisa BERLAWANAN ARAH -- pada LLM lokal kelas 7B-8B. Bukti
+     konkretnya adalah kontras CodeLlama (FCR 100%, confidence 0,91, tapi
+     SVR hanya 27-39%) vs Qwen2.5-Coder (FCR 0%, confidence 0,00, tapi SVR
+     100%). Jika hanya melihat FCR atau confidence saja, kesimpulan yang
+     diambil akan TERBALIK 180 derajat dari kesimpulan yang benar.
+
+     Implikasi praktisnya MELAMPAUI kasus migrasi PHP: SISTEM APAPUN yang
+     menggunakan LLM lokal kecil-menengah untuk TUGAS YANG OUTPUT-nya BISA
+     DIVERIFIKASI SECARA OBJEKTIF (di sini: `php -l`) HARUS MEMPRIORITASKAN
+     VERIFIKASI OBJEKTIF tersebut sebagai GERBANG UTAMA, dan TIDAK BOLEH
+     mengandalkan SINYAL SELF-REPORTED (confidence, kepatuhan format) dari
+     model sebagai DASAR KEPUTUSAN OTOMATISASI -- karena sinyal tersebut
+     TERBUKTI TIDAK TERKALIBRASI dan BISA MENYESATKAN dengan cara yang
+     "TERLIHAT MEYAKINKAN" (lihat bagian D, Q12 dan bagian E, Q33: profil
+     "confidently, consistently wrong" milik CodeLlama).
+
+     Temuan kedua yang sama pentingnya (di luar perbandingan LLM): ΔF=0
+     MEMBUKTIKAN secara empiris bahwa transformasi BERBASIS AST (Rector)
+     beroperasi di LAPISAN SINTAKSIS dan TIDAK MENYENTUH (tapi juga TIDAK
+     MERUSAK) LAPISAN SEMANTIK/KEAMANAN -- mengonfirmasi bahwa MIGRASI
+     OTOMATIS dan PERBAIKAN KEAMANAN adalah DUA MASALAH BERBEDA yang
+     memerlukan PENDEKATAN BERBEDA (AST vs penalaran AI/manusia), dan
+     KEDUANYA TIDAK BISA DIGABUNG MENJADI SATU LANGKAH OTOMATIS TUNGGAL.
+
+-------------------------------------------------------------------------------
+
+Q35: Apa yang MENGEJUTKAN selama penelitian?
+
+A35: Ada tiga hal yang TIDAK SESUAI HIPOTESIS AWAL:
+
+     1. MODEL YANG "PALING PATUH INSTRUKSI" JUSTRU MENGHASILKAN KODE
+        PALING RUSAK. Ekspektasi awal (wajar secara intuisi) adalah: model
+        yang mengikuti format dengan baik (CodeLlama, FCR 100%) seharusnya
+        juga "lebih kompeten" secara umum, termasuk dalam menulis kode.
+        Realitanya TERBALIK -- CodeLlama paling DISIPLIN dalam hal FORMAT
+        tapi paling BURUK dalam hal SUBSTANSI (SVR 27-39%), sementara Qwen
+        yang TERKESAN "MENGABAIKAN INSTRUKSI" (FCR 0%) justru paling
+        KOMPETEN secara substansi (SVR 100%). Korelasi yang DIASUMSIKAN
+        SEARAH ternyata TIDAK ADA, bahkan CENDERUNG TERBALIK.
+
+     2. LEBIH BANYAK INSTRUKSI/CONTOH (FEW-SHOT) BISA MEMBUAT MODEL LEBIH
+        BURUK, BUKAN LEBIH BAIK. Pada Mistral, penambahan SATU CONTOH
+        FEW-SHOT KONKRET di Kondisi B (yang secara TEORI seharusnya
+        MEMBANTU model memahami format yang diinginkan) justru MENURUNKAN
+        FCR dari 6% ke 0%. Fenomena "distraction" ini -- model kecil
+        teralihkan untuk MENIRU STRUKTUR CONTOH alih-alih MENGERJAKAN TUGAS
+        ASLINYA -- KONTRA-INTUITIF bagi siapapun yang terbiasa dengan
+        "few-shot prompting selalu membantu" pada model BESAR (GPT-4,
+        Claude, dll).
+
+     3. SELURUH KERENTANAN PADA STUDI KASUS (FT UGM MAUPUN DTI) BERASAL
+        DARI SATU FILE FRAMEWORK (`system/core/Output.php`), BUKAN dari
+        KODE APLIKASI CUSTOM. Hipotesis awal (umum dalam riset migrasi
+        legacy) adalah bahwa KODE APLIKASI LAMA YANG DITULIS BERTAHUN-TAHUN
+        oleh BANYAK DEVELOPER akan menjadi SUMBER UTAMA kerentanan SQL
+        Injection/XSS klasik. Realitanya, kode aplikasi `application/`
+        FT UGM dan DTI TIDAK MENGHASILKAN SATU PUN temuan Semgrep --
+        seluruh 11 temuan terlokalisasi di kode INTI CodeIgniter 3 yang
+        TIDAK PERNAH DISENTUH developer aplikasi. Ini MENGGESER NARASI
+        "developer aplikasi ceroboh" menjadi "kerentanan WARISAN DARI
+        FRAMEWORK YANG SUDAH USANG" -- temuan yang justru lebih relevan
+        untuk argumen "PERLU MIGRASI/UPGRADE FRAMEWORK", bukan sekadar
+        "perlu training developer".
+
+-------------------------------------------------------------------------------
+
+Q36: Apa REKOMENDASI yang bisa diberikan (dari hasil penelitian ini)?
+
+A36: Rekomendasi dikelompokkan untuk TIGA AUDIENS berbeda:
+
+     UNTUK INSTITUSI (FT UGM / pengelola sistem CodeIgniter 3 serupa):
+     1. PRIORITASKAN UPGRADE/PATCH FRAMEWORK INTI (CodeIgniter 3 ->
+        versi lebih baru atau setidaknya patch keamanan `system/core/
+        Output.php`) DI ATAS audit kode aplikasi custom -- karena SELURUH
+        temuan kerentanan terkonsentrasi di sana (lihat A35 poin 3).
+     2. JADIKAN PHPStan level 5 sebagai GERBANG WAJIB sebelum deploy ke
+        PHP 8.3, KARENA 2.790/2.354 potensi error TIPE adalah MASALAH
+        KOMPATIBILITAS NYATA yang akan MENYEBABKAN FATAL ERROR di
+        produksi PHP 8.x jika tidak ditangani -- ini RISIKO OPERASIONAL
+        yang LEBIH MENDESAK daripada 11 temuan Semgrep.
+     3. GUNAKAN Rector dengan ruleset PHP 8.3 (bukan 8.4/8.5) sebagai
+        LANGKAH PERTAMA migrasi -- terbukti 91,7-97,6% conversion rate
+        dengan 100% syntax validity pada sampel validasi.
+
+     UNTUK PENGEMBANGAN PIPELINE LANJUTAN (peneliti berikutnya):
+     4. ADOPSI Qwen2.5-Coder (atau model dengan profil SVR tinggi serupa)
+        sebagai MODEL DEFAULT AI Engine, dengan PROMPT FORMAT YANG
+        DILONGGARKAN (tidak memaksa `CONFIDENCE:`) -- sesuai temuan
+        Kondisi B.
+     5. JANGAN GUNAKAN confidence self-reported sebagai GERBANG
+        OTOMATISASI TUNGGAL -- gunakan `php -l` (atau pemeriksaan
+        sintaksis serupa) sebagai GERBANG WAJIB INDEPENDEN, dengan
+        confidence HANYA sebagai INFORMASI TAMBAHAN bagi reviewer manusia.
+     6. TAMBAHKAN "SEMANTIC RELEVANCE CHECK" otomatis (keyword/pattern
+        check sesuai `vuln_type`, mis. `prepare`/`bindParam` untuk SQLi)
+        sebagai LAPIS KEDUA setelah SVR, untuk MENANGKAL output yang
+        SECARA SINTAKSIS VALID TAPI TIDAK RELEVAN (lihat bagian E, Q21).
+     7. TAMBAHKAN "POST-APPLICATION VALIDATION" -- re-run `php -l` + PHPStan
+        pada FILE YANG SUDAH DITAMBAL setelah saran AI diterapkan, menutup
+        loop yang saat ini terbuka (bagian E, Q25).
+     8. UNTUK TEMUAN DI `system/`, ARAHKAN rekomendasi AI ke POLA
+        CORE-EXTENSION CI3 (`application/core/MY_*.php`), bukan edit
+        langsung file framework (bagian E, Q27).
+
+     UNTUK METODOLOGI EVALUASI LLM (kontribusi metodologis):
+     9. SAAT melaporkan SVR, SELALU SERTAKAN extraction_rate (atau metrik
+        gabungan "Overall Success Rate = SVR x extraction_rate") di
+        TABEL/GRAFIK YANG SAMA -- agar SVR tidak disalahbaca sendirian
+        (bagian E, Q31).
+     10. UNTUK PENELITIAN LANJUTAN, NAIKKAN n (jumlah run per temuan per
+         model) dari 3 menjadi >=10 agar variance/stdev confidence bisa
+         diinterpretasi sebagai INDIKATOR BIAS SISTEMATIS secara
+         statistik valid (bagian C, Q9; bagian E, Q33).
+
+-------------------------------------------------------------------------------
+
+Q37: Kalau penelitian ini DIULANG, apa yang akan DIPERBAIKI?
+
+A37: Dengan PENGETAHUAN YANG ADA SEKARANG (hindsight), beberapa
+     perubahan desain akan diprioritaskan:
+
+     1. TAMBAHKAN METRIK GABUNGAN "OVERALL SUCCESS RATE" (= SVR x
+        extraction_rate) SEJAK AWAL sebagai METRIK UTAMA, bukan
+        tambahan belakangan -- agar laporan TIDAK BERGANTUNG pada
+        pembaca untuk "membaca dua angka bersamaan" (bagian E, Q31).
+
+     2. NAIKKAN n (runs per finding) dari 3 ke MINIMAL 10, dan/atau
+        TAMBAH JUMLAH TEMUAN yang diuji -- 11 temuan dari SATU file
+        (Output.php) membatasi GENERALISASI kesimpulan perbandingan 
+        model (bagian D, Q9). Trade-off-nya adalah WAKTU KOMPUTASI yang
+        jauh lebih besar pada hardware CPU-only -- akan PERLU
+        DIPERTIMBANGKAN sejak tahap PERENCANAAN ANGGARAN WAKTU
+        penelitian, bukan diputuskan reaktif di tengah jalan.
+
+     3. RANCANG SEMANTIC RELEVANCE CHECK (bagian E, Q21) SEBAGAI BAGIAN
+        DARI `llm_quality_checker.py` SEJAK AWAL -- bukan sebagai
+        rekomendasi pasca-penelitian. Ini akan MEMPERKUAT validitas
+        klaim "Qwen menghasilkan kode SUBSTANTIF" dengan BUKTI OTOMATIS/
+        TERUKUR, bukan hanya tinjauan manual kualitatif (bagian E, Q21).
+
+     4. CARI/BANGUN DATASET TEMUAN YANG LEBIH BERAGAM SEBELUM eksperimen
+        Kondisi B DIMULAI -- idealnya PISAHKAN dataset "tuning" (untuk
+        merancang strategi prompt per-model) dari dataset "evaluasi
+        akhir" (untuk MENGUKUR hasil Kondisi B), agar terhindar dari
+        kekhawatiran "tuning on the test set" yang diakui di bagian B,
+        Q6. Dengan HANYA 11 temuan, pemisahan ini TIDAK FEASIBLE -- itu
+        sebabnya butuh DATASET TEMUAN YANG LEBIH BESAR sejak awal
+        (mis. menggabungkan temuan FT UGM dan DTI dari awal, bukan
+        memperlakukan keduanya sebagai studi kasus terpisah).
+
+     5. TAMBAHKAN FILTER NOISE PHPStan BERBASIS PATH FILE (bukan hanya
+        ISI PESAN) sejak implementasi awal `analyzer.py` -- lebih ROBUST
+        terhadap kasus tepi dan lebih mudah DIAUDIT ("noise HANYA berlaku
+        untuk file di `system/`") (bagian E, Q26).
+
+     6. DOKUMENTASIKAN secara eksplisit, SEJAK BAB III (bukan baru
+        muncul di Bab IV/V sebagai "keterbatasan"), bahwa A.8.29
+        diinterpretasikan dalam KONTEKS PROYEK MIGRASI (before/after
+        baseline), bukan SDLC operasional berkelanjutan -- agar tidak
+        terkesan sebagai "pembelaan setelah ditemukan masalah" saat
+        sidang, melainkan SEBAGAI POSISI METODOLOGIS YANG DISADARI SEJAK
+        AWAL (bagian E, Q24).
+
+===============================================================================
+Catatan: Dokumen ini melengkapi docs/sidang-judul-qa.md dengan pertanyaan
+level konseptual/HOTS yang menyasar pemahaman MENDALAM tentang LLM,
+metodologi evaluasi AI, AST/Rector, PHPStan, dan trade-off desain sistem
+AI -- bukan sekadar hasil angka. Bagian A-D disusun berdasarkan arsitektur
+aktual pipeline/ai_engine.py; Bagian E adalah jawaban untuk pertanyaan kritis
+tambahan dari rekan diskusi (Rama), disusun berdasarkan pembacaan langsung
+pipeline/analyzer.py, pipeline/ai_engine.py, pipeline/iso_mapper.py, dan
+pipeline/llm_quality_checker.py.
+===============================================================================

@@ -1,0 +1,86 @@
+{
+  "description": "Secret mapping: finding -> B0/T1 -> blinded A/B label. DO NOT share with raters. Used for analysis after ratings are collected.",
+  "seed": 42,
+  "source_file": "C:\\Users\\HP VICTUS\\Documents\\GitHub\\skripsi-php-migration\\reports\\llm_comparison_20260430_083613.json",
+  "ai_model": "qwen2.5-coder:7b",
+  "ai_run_used": 1,
+  "mappings": [
+    {
+      "finding_id": "FT-01",
+      "vuln_type": "SQL Injection",
+      "line_start": 768,
+      "b0_label": "B",
+      "t1_label": "A"
+    },
+    {
+      "finding_id": "FT-02",
+      "vuln_type": "SSRF",
+      "line_start": 583,
+      "b0_label": "A",
+      "t1_label": "B"
+    },
+    {
+      "finding_id": "FT-03",
+      "vuln_type": "SSRF",
+      "line_start": 632,
+      "b0_label": "A",
+      "t1_label": "B"
+    },
+    {
+      "finding_id": "FT-04",
+      "vuln_type": "SSRF",
+      "line_start": 637,
+      "b0_label": "B",
+      "t1_label": "A"
+    },
+    {
+      "finding_id": "FT-05",
+      "vuln_type": "SSRF",
+      "line_start": 677,
+      "b0_label": "B",
+      "t1_label": "A"
+    },
+    {
+      "finding_id": "FT-06",
+      "vuln_type": "SSRF",
+      "line_start": 677,
+      "b0_label": "B",
+      "t1_label": "A"
+    },
+    {
+      "finding_id": "FT-07",
+      "vuln_type": "SSRF",
+      "line_start": 684,
+      "b0_label": "B",
+      "t1_label": "A"
+    },
+    {
+      "finding_id": "FT-08",
+      "vuln_type": "SSRF",
+      "line_start": 684,
+      "b0_label": "A",
+      "t1_label": "B"
+    },
+    {
+      "finding_id": "FT-09",
+      "vuln_type": "SSRF",
+      "line_start": 698,
+      "b0_label": "A",
+      "t1_label": "B"
+    },
+    {
+      "finding_id": "FT-10",
+      "vuln_type": "SSRF",
+      "line_start": 704,
+      "b0_label": "A",
+      "t1_label": "B"
+    },
+    {
+      "finding_id": "FT-11",
+      "vuln_type": "SSRF",
+      "line_start": 766,
+      "b0_label": "B",
+      "t1_label": "A"
+    }
+  ]
+}

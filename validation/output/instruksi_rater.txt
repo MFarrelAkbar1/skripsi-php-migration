@@ -1,0 +1,114 @@
+================================================================
+INSTRUKSI PENILAIAN PAKET TEMUAN KEAMANAN
+================================================================
+
+Terima kasih atas kesediaan Anda menjadi rater dalam eksperimen
+ini. Dokumen ini menjelaskan tugas Anda dan definisi dimensi
+penilaian.
+
+----------------------------------------------------------------
+KONTEKS
+----------------------------------------------------------------
+Anda akan menilai paket-paket temuan keamanan dari pemindaian
+kode PHP menggunakan alat analisis statis. Setiap temuan
+disajikan dalam dua versi (Paket A dan Paket B) yang mungkin
+berbeda dalam tingkat detail dan kelengkapan informasinya.
+
+Tugas Anda adalah menilai SETIAP paket secara INDEPENDEN pada
+empat dimensi menggunakan skala Likert 1-7. Jangan
+membandingkan Paket A dan Paket B secara langsung -- nilai
+masing-masing berdasarkan kualitas intrinsiknya.
+
+----------------------------------------------------------------
+SKALA PENILAIAN: 1-7
+----------------------------------------------------------------
+1 = Sangat buruk / tidak memenuhi sama sekali
+2 = Buruk
+3 = Di bawah rata-rata
+4 = Cukup / rata-rata
+5 = Di atas rata-rata
+6 = Baik
+7 = Sangat baik / memenuhi sepenuhnya
+
+----------------------------------------------------------------
+DIMENSI PENILAIAN
+----------------------------------------------------------------
+
+1. AKURASI (skor_akurasi)
+   Seberapa tepat dan benar informasi yang disajikan dalam
+   paket ini?
+   - Apakah identifikasi jenis kerentanan sudah tepat?
+   - Apakah penjelasan penyebab kerentanan (jika ada) sesuai
+     dengan kode yang ditampilkan?
+   - Apakah ada informasi yang salah atau menyesatkan?
+
+   1 = Informasi salah/menyesatkan
+   4 = Sebagian besar benar, ada minor inaccuracy
+   7 = Sepenuhnya akurat dan tepat
+
+2. KEJELASAN (skor_kejelasan)
+   Seberapa mudah dipahami informasi dalam paket ini oleh
+   seorang pengembang dengan pengetahuan PHP dasar?
+   - Apakah bahasa yang digunakan jelas dan tidak ambigu?
+   - Apakah alur penjelasan logis?
+   - Apakah pengembang bisa memahami APA masalahnya dan
+     MENGAPA itu berbahaya?
+
+   1 = Tidak bisa dipahami tanpa riset tambahan
+   4 = Bisa dipahami dengan sedikit usaha
+   7 = Langsung jelas tanpa interpretasi tambahan
+
+3. ACTIONABILITY (skor_actionability)
+   Seberapa mudah seorang pengembang dapat mengambil tindakan
+   perbaikan berdasarkan informasi dalam paket ini?
+   - Apakah ada panduan langkah perbaikan yang spesifik?
+   - Apakah contoh kode perbaikan (jika ada) bisa langsung
+     diterapkan atau diadaptasi?
+   - Apakah pengembang tahu apa yang harus dilakukan
+     SELANJUTNYA setelah membaca paket ini?
+
+   1 = Tidak ada petunjuk tindakan sama sekali
+   4 = Ada arah umum tapi perlu riset tambahan
+   7 = Langkah perbaikan jelas dan spesifik
+
+4. KETEPATAN PEMETAAN ISO (skor_ketepatan_iso)
+   Seberapa tepat kontrol ISO/IEC 27001:2022 yang dipetakan
+   terhadap temuan ini?
+   - Apakah kontrol yang dicantumkan relevan dengan jenis
+     kerentanan yang ditemukan?
+   - Apakah pemetaan masuk akal dari perspektif kepatuhan
+     keamanan informasi?
+
+   Referensi singkat kontrol:
+   * A.8.26 - Application Security Requirements:
+     perlindungan terhadap OWASP Top 10 (SQLi, XSS, dll.)
+   * A.8.28 - Secure Coding: aturan pengkodean aman,
+     validasi input, parameterised queries
+   * A.8.29 - Security Testing in Development: pengujian
+     keamanan sebagai bagian proses pengembangan
+
+   1 = Kontrol yang dipetakan tidak relevan
+   4 = Kontrol relevan tapi bisa lebih tepat
+   7 = Pemetaan sangat tepat dan lengkap
+
+----------------------------------------------------------------
+PETUNJUK TEKNIS
+----------------------------------------------------------------
+- Isi skor pada kolom yang tersedia di file CSV.
+- Gunakan angka bulat 1-7 saja.
+- Jika Anda merasa tidak cukup kompeten menilai dimensi
+  tertentu, beri nilai 0 (nol) dan beri catatan di kolom
+  komentar.
+- Boleh menambahkan catatan kualitatif di kolom 'komentar'
+  jika ada observasi yang ingin disampaikan.
+
+----------------------------------------------------------------
+PENTING
+----------------------------------------------------------------
+- Nilai setiap paket secara mandiri. Hindari anchoring effect
+  dari paket sebelumnya.
+- Tidak ada jawaban benar atau salah -- kami menilai kualitas
+  informasi, bukan pengetahuan Anda.
+- Urutan penyajian paket sudah diacak.
+
+================================================================

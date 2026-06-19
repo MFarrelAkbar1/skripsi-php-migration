@@ -26,6 +26,7 @@ import json
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -761,6 +762,7 @@ def run_pipeline(
 
     _print_final_summary(result)
     _save_pipeline_result(result, reports_dir, timestamp)
+    _save_phpstan_detail(analysis, reports_dir, timestamp)
     return result
 
 
@@ -996,6 +998,102 @@ def _analysis_summary_to_dict(analysis: AnalysisResult | None) -> dict | None:
         "duration_sec": s.duration_sec,
         "phpstan_parse_errors": s.phpstan_parse_errors,
     }
+
+
+# ---------------------------------------------------------------------------
+# PHPStan error detail dump (for category-breakdown analysis / Bab 4)
+# ---------------------------------------------------------------------------
+
+# Ordered (label, predicate) rules used to bucket PHPStan messages into the
+# categories commonly reported in the skripsi (unresolved class, void return
+# misuse, type mismatch, etc.).  First match wins; falls back to "other".
+# Each predicate receives the lower-cased message.
+_PHPSTAN_CATEGORY_RULES: tuple[tuple[str, Callable[[str], bool]], ...] = (
+    ("unresolved_class", lambda m: "unknown class" in m or "instantiated class" in m),
+    ("void_return_used", lambda m: "(void) is used" in m),
+    ("wrong_parameter_count", lambda m: "invoked with" in m and "required" in m),
+    ("undefined_property", lambda m: "access property" in m or "property $" in m),
+    ("undefined_constant", lambda m: "constant" in m and "not found" in m),
+    ("undefined_function", lambda m: "function" in m and "not found" in m),
+    ("type_mismatch", lambda m: any(
+        kw in m for kw in (
+            "expects", "given", "accepts", "incompatible", "argument #",
+            "return type", "nullable", "cannot be", "parameter type",
+        )
+    )),
+    ("dead_code", lambda m: any(
+        kw in m for kw in (
+            "dead code", "unreachable", "always true", "always false", "never returns",
+        )
+    )),
+)
+
+
+def _categorize_phpstan_message(message: str) -> str:
+    """Bucket a PHPStan message into a coarse category for breakdown reports."""
+    lower = message.lower()
+    for label, predicate in _PHPSTAN_CATEGORY_RULES:
+        if predicate(lower):
+            return label
+    return "other"
+
+
+def _save_phpstan_detail(
+    analysis: AnalysisResult | None,
+    reports_dir: Path,
+    timestamp: str,
+) -> None:
+    """
+    Dump full PHPStan error/noise detail to ``phpstan_detail_{timestamp}.json``.
+
+    ``pipeline_result_*.json`` only keeps aggregate counts (kept lightweight by
+    design).  This file persists every individual message -- both the
+    "real" application errors and the CI3-noise messages that were filtered
+    out -- plus a category tally, so the CI3-noise-vs-custom-app and
+    error-category breakdowns can be reproduced without re-running PHPStan.
+    """
+    if analysis is None:
+        return
+
+    output_path = reports_dir / f"phpstan_detail_{timestamp}.json"
+
+    error_category_tally: dict[str, int] = {}
+    errors_payload: list[dict] = []
+    for err in analysis.errors:
+        category = _categorize_phpstan_message(err.message)
+        error_category_tally[category] = error_category_tally.get(category, 0) + 1
+        errors_payload.append(
+            {
+                "file": err.file_path,
+                "line": err.line,
+                "message": err.message,
+                "severity": err.severity,
+                "iso_controls": err.iso_controls,
+                "category": category,
+            }
+        )
+
+    noise_category_tally: dict[str, int] = {}
+    for noise_msg in analysis.noise_messages:
+        # noise_msg format: "<file>:<line> -- <message>"
+        message = noise_msg.split(" -- ", 1)[-1]
+        category = _categorize_phpstan_message(message)
+        noise_category_tally[category] = noise_category_tally.get(category, 0) + 1
+
+    payload: dict = {
+        "total_errors": analysis.summary.total_errors,
+        "framework_noise_filtered": analysis.summary.framework_noise_count,
+        "errors_by_category": error_category_tally,
+        "noise_by_category": noise_category_tally,
+        "errors": errors_payload,
+        "noise_messages": analysis.noise_messages,
+    }
+
+    output_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    console.print(f"[dim]PHPStan error detail saved -> {output_path}[/dim]")
 
 
 # ---------------------------------------------------------------------------

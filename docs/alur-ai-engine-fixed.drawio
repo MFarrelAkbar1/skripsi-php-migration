@@ -1,0 +1,97 @@
+<mxGraphModel dx="1451" dy="733" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;fontSize=15;" value="Temuan Semgrep pre-scan&#xa;(dari scanner.py)" vertex="1">
+      <mxGeometry height="50" width="260" x="330" y="30" as="geometry" />
+    </mxCell>
+    <mxCell id="3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=15;" value="Filter Prioritas&#xa;Hanya prioritas &amp;lt;= 3 yang lanjut&#xa;(SQL Injection, XSS, Deprecated Function)" vertex="1">
+      <mxGeometry height="110" width="300" x="310" y="120" as="geometry" />
+    </mxCell>
+    <mxCell id="4" edge="1" parent="1" source="2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;fontSize=15;" target="3">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8d7da;strokeColor=#cc0000;strokeWidth=2;fontSize=15;" value="Dibuang&#xa;priority 4-6 dan 99&#xa;(Hardcoded Cred, SSRF/Path Traversal,&#xa;Weak Crypto, unclassified)" vertex="1">
+      <mxGeometry height="70" width="190" x="660" y="140" as="geometry" />
+    </mxCell>
+    <mxCell id="6" edge="1" parent="1" source="3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#cc0000;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=15;" target="5" value="Tidak&#xa;(priority &amp;gt; 3)">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f0ff;strokeColor=#534AB7;strokeWidth=2;fontSize=15;" value="Potong kode&#xa;Maks. 2000 karakter (MAX_CODE_CHARS)" vertex="1">
+      <mxGeometry height="55" width="300" x="310" y="260" as="geometry" />
+    </mxCell>
+    <mxCell id="8" edge="1" parent="1" source="3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=15;" target="7" value="Ya&#xa;(priority &amp;lt;= 3)">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="9" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534AB7;strokeWidth=2;fontSize=15;" value="Cek panjang kode&#xa;Berapa baris?" vertex="1">
+      <mxGeometry height="100" width="280" x="320" y="340" as="geometry" />
+    </mxCell>
+    <mxCell id="10" edge="1" parent="1" source="7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#534AB7;strokeWidth=2;fontSize=15;" target="9">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534AB7;strokeWidth=2;fontSize=15;" value="FIM Prompt&#xa;Fill-in-Middle&#xa;(kode 3 baris atau kurang)" vertex="1">
+      <mxGeometry height="65" width="180" x="110" y="435" as="geometry" />
+    </mxCell>
+    <mxCell id="12" edge="1" parent="1" source="9" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#534AB7;strokeWidth=2;dashed=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=15;" target="11" value="3 baris &#xa;atau kurang">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="200" y="390" />
+        </Array>
+        <mxPoint x="280" y="275" as="sourcePoint" />
+        <mxPoint x="200" y="435" as="targetPoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534AB7;strokeWidth=2;fontSize=15;" value="Instruct Prompt&#xa;Satu string prompt&#xa;via /api/generate" vertex="1">
+      <mxGeometry height="65" width="180" x="640" y="430" as="geometry" />
+    </mxCell>
+    <mxCell id="14" edge="1" parent="1" source="9" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#534AB7;strokeWidth=2;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=15;" target="13" value="lebih dari 3 baris">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="730" y="430" />
+          <mxPoint x="730" y="540" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f0ff;strokeColor=#534AB7;strokeWidth=3;fontSize=15;" value="Ollama API lokal&#xa;localhost:11434/api/generate&#xa;Qwen2.5-Coder 7b  Temperature 0.1" vertex="1">
+      <mxGeometry height="65" width="340" x="300" y="500" as="geometry" />
+    </mxCell>
+    <mxCell id="16" edge="1" parent="1" source="11" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#534AB7;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=15;" target="15">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="200" y="530" />
+          <mxPoint x="290" y="530" />
+          <mxPoint x="290" y="533" />
+        </Array>
+        <mxPoint x="180" y="500" as="sourcePoint" />
+        <mxPoint x="290" y="577.5" as="targetPoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="17" edge="1" parent="1" source="13" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#534AB7;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=15;" target="15">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="730" y="533" />
+          <mxPoint x="640" y="533" />
+        </Array>
+        <mxPoint x="710" y="600" as="targetPoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1f5ee;strokeColor=#0F6E56;strokeWidth=2;fontSize=15;" value="Parse Respons&#xa;Ekstrak blok php  Ekstrak CONFIDENCE 0-100" vertex="1">
+      <mxGeometry height="60" width="340" x="300" y="590" as="geometry" />
+    </mxCell>
+    <mxCell id="19" edge="1" parent="1" source="15" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;fontSize=15;" target="18">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="20" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3cd;strokeColor=#856404;strokeWidth=2;dashed=1;fontSize=15;" value="Fallback&#xa;// Manual review required" vertex="1">
+      <mxGeometry height="55" width="190" x="770" y="590" as="geometry" />
+    </mxCell>
+    <mxCell id="21" edge="1" parent="1" source="18" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#856404;strokeWidth=2;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=15;" target="20" value="Tidak ada &#xa;blok php">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="22" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#0F6E56;strokeWidth=3;fontSize=15;" value="AIRecommendation&#xa;suggested_fix  explanation  confidence  iso_controls&#xa;dikirim ke iso_mapper.py" vertex="1">
+      <mxGeometry height="65" width="380" x="280" y="680" as="geometry" />
+    </mxCell>
+    <mxCell id="23" edge="1" parent="1" source="18" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;strokeWidth=2;fontSize=15;" target="22">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+  </root>
+</mxGraphModel>
