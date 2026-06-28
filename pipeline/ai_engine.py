@@ -196,6 +196,7 @@ class PHPAIEngine:
         iso_controls: list[str] | None = None,
         file_path: str = "<unknown>",
         line_start: int = 0,
+        max_chars: int | None = None,
     ) -> AIRecommendation:
         """
         Ask the AI model to explain and fix a single vulnerable PHP snippet.
@@ -204,7 +205,8 @@ class PHPAIEngine:
         ----------
         code:
             PHP source code containing the vulnerability.  Truncated to
-            ``MAX_CODE_CHARS`` (2 000) before sending to the model.
+            ``max_chars`` (or ``MAX_CODE_CHARS`` (2 000) when not given)
+            before sending to the model.
         vuln_type:
             Human-readable vulnerability category, e.g. ``"SQL Injection"``.
         context:
@@ -217,6 +219,13 @@ class PHPAIEngine:
             Source file path -- stored in the returned dataclass for traceability.
         line_start:
             Line number -- stored in the returned dataclass for traceability.
+        max_chars:
+            Per-call override of the code-context budget. Defaults to
+            ``MAX_CODE_CHARS`` (the value used by the zero-shot model
+            comparison experiment) when omitted, so existing callers are
+            unaffected. Pass a larger value (e.g. 6000) to send wider
+            source context -- e.g. an enclosing function -- for experiments
+            that need more differentiated, less generic explanations.
 
         Returns
         -------
@@ -225,7 +234,8 @@ class PHPAIEngine:
             if the model was unreachable or produced no parseable output.
         """
         controls = iso_controls or ["A.8.28"]
-        truncated = code[:MAX_CODE_CHARS]
+        limit = max_chars if max_chars is not None else MAX_CODE_CHARS
+        truncated = code[:limit]
 
         use_fim = self._should_use_fim(truncated)
         prompt = (

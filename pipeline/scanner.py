@@ -9,6 +9,7 @@ dipetakan ke prioritas kerentanan dan kontrol ISO/IEC 27001:2022.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -578,3 +579,107 @@ def run_scan(
         semgrep_exe=semgrep_exe, rulesets=rulesets, exclude_dirs=exclude_dirs
     )
     return scanner.run(target_path)
+
+
+# ---------------------------------------------------------------------------
+# Context window extraction (wider source context for AI Engine input)
+# ---------------------------------------------------------------------------
+#
+# Semgrep's own ``extra.lines`` (used for ScanFinding.code_snippet) is just
+# the matched span, which can be a single short line. That is too little
+# context for the AI Engine to produce findings-specific explanations,
+# especially for clusters of similar findings (e.g. many SSRF matches in the
+# same file). The helpers below re-read the original source file and pull a
+# wider window around a finding's line number -- used so far only by the
+# B0/T1 validation experiment, not by the main pipeline run.
+
+_FUNC_DEF_RE = re.compile(
+    r"^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*"
+    r"function\s+\w+\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _find_enclosing_function(
+    lines: list[str], line_idx: int, max_span: int = 200
+) -> tuple[int, int] | None:
+    """
+    Locate the 0-indexed ``(start, end)`` bounds of the function enclosing
+    ``lines[line_idx]``, searching at most ``max_span`` lines in each
+    direction.
+
+    Uses a simple brace-counting heuristic (not a real PHP parser) -- good
+    enough for well-formatted source files, but can be thrown off by braces
+    inside strings/heredocs/comments. Returns ``None`` when no function
+    definition is found within range, or its closing brace can't be located.
+    """
+    start = None
+    for i in range(line_idx, max(-1, line_idx - max_span), -1):
+        if _FUNC_DEF_RE.match(lines[i]):
+            start = i
+            break
+    if start is None:
+        return None
+
+    depth = 0
+    seen_open = False
+    for i in range(start, min(len(lines), start + max_span)):
+        depth += lines[i].count("{") - lines[i].count("}")
+        if "{" in lines[i]:
+            seen_open = True
+        if seen_open and depth <= 0:
+            return start, i
+
+    return None
+
+
+def extract_context_window(
+    source_path: Path,
+    line_start: int,
+    context_lines: int = 30,
+    max_function_span: int = 200,
+) -> tuple[str, int, int]:
+    """
+    Extract a wider snippet of PHP source around ``line_start``.
+
+    Prefers the enclosing function body (found via :func:`_find_enclosing_function`)
+    so the AI Engine sees a complete, self-contained unit of code. Falls back
+    to a flat ``±context_lines`` window when no function boundary is found
+    (e.g. the line is at module level, or the function exceeds
+    ``max_function_span`` lines).
+
+    Parameters
+    ----------
+    source_path:
+        Path to the original PHP source file (not the Rector output).
+    line_start:
+        1-indexed line number of the finding (as reported by Semgrep).
+    context_lines:
+        Number of lines before/after to include when falling back to a
+        flat window.
+    max_function_span:
+        Maximum lines to search/scan when looking for the enclosing function.
+
+    Returns
+    -------
+    tuple[str, int, int]
+        ``(snippet, window_start_line, window_end_line)`` -- the extracted
+        code (no line-number prefixes, ready to embed in a ```php block)
+        and the 1-indexed line range it spans. Returns an error placeholder
+        and ``(0, 0)`` when ``source_path`` does not exist.
+    """
+    if not source_path.exists():
+        return f"[Source file not found: {source_path}]", 0, 0
+
+    lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    idx = max(0, min(len(lines) - 1, line_start - 1))
+
+    bounds = _find_enclosing_function(lines, idx, max_span=max_function_span)
+    if bounds is not None:
+        start_idx, end_idx = bounds
+    else:
+        start_idx = max(0, idx - context_lines)
+        end_idx = min(len(lines) - 1, idx + context_lines)
+
+    snippet = "\n".join(lines[start_idx : end_idx + 1])
+    return snippet, start_idx + 1, end_idx + 1
