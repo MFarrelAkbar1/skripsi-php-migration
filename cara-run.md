@@ -31,6 +31,9 @@
   8. Custom folder input/output/reports
   python pipeline/main.py --input input --output output --reports reports
 
+  9. Upgrade aplikasi Laravel lama (sumber Laravel 6-8), lihat docs/framework_profiles.md
+  python pipeline/main.py --framework laravel --target-laravel 12 --target-php 8.2 --input input
+
   Cek reports/ setelah selesai untuk iso_report_<timestamp>.json, pipeline_result_<timestamp>.json, dan
   llm_comparison_<timestamp>.json (kalau pakai --compare-all).
 

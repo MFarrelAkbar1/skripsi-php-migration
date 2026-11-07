@@ -1,6 +1,7 @@
 {
     "require-dev": {
         "rector/rector": "^2.3",
-        "phpstan/phpstan": "^2.1"
+        "phpstan/phpstan": "^2.1",
+        "driftingly/rector-laravel": "2.5.*"
     }
 }
