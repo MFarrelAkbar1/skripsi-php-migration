@@ -1,0 +1,7 @@
+{
+    "packages": [
+        {"name": "laravel/framework", "version": "v8.83.29"},
+        {"name": "laravel/sanctum", "version": "v2.15.1"}
+    ],
+    "packages-dev": []
+}

@@ -1,0 +1,59 @@
+rules:
+  - id: laravel-raw-query-concat-sql-injection
+    languages: [php]
+    severity: ERROR
+    message: >-
+      Concatenated value in a raw database call can lead to SQL injection.
+      Use bound parameters.
+    pattern-either:
+      - pattern: DB::$METHOD($A . $B, ...)
+      - pattern: $Q->$METHOD($A . $B, ...)
+    metavariable-regex:
+      metavariable: $METHOD
+      regex: ^(select|statement|insert|update|delete|unprepared|raw|whereRaw|orWhereRaw|selectRaw|havingRaw|orderByRaw)$
+
+  - id: laravel-mass-assignment-empty-guarded
+    languages: [php]
+    severity: WARNING
+    message: >-
+      Empty $guarded lets every attribute be mass assigned. List allowed
+      attributes in $fillable.
+    pattern: |
+      class $C extends $P {
+        ...
+        protected $guarded = [];
+        ...
+      }
+
+  - id: laravel-mass-assignment-request-all
+    languages: [php]
+    severity: WARNING
+    message: >-
+      Passing all request data to a model write lets a client set any attribute.
+      Pass validated data or named fields.
+    pattern-either:
+      - pattern: $MODEL::create($REQ->all())
+      - pattern: $OBJ->update($REQ->all())
+      - pattern: $OBJ->fill($REQ->all())
+
+  - id: laravel-env-outside-config
+    languages: [php]
+    severity: WARNING
+    message: >-
+      env() outside config files returns null once the configuration is cached.
+      Read the value with config().
+    pattern: env(...)
+    paths:
+      exclude:
+        - '**/config/**'
+
+  - id: laravel-debug-enabled
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      Debug mode is fixed to true in config/app.php, so error pages can expose
+      internal details. Read it from APP_DEBUG with a false default.
+    pattern-regex: '[''"]debug[''"]\s*=>\s*true'
+    paths:
+      include:
+        - '**/config/app.php'

@@ -1,0 +1,11 @@
+rules:
+  - id: laravel-blade-raw-output-xss
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      Blade raw output skips HTML escaping and can lead to XSS.
+      Use {{ }} unless the value is already sanitized.
+    pattern-regex: '\{!!\s*.+?\s*!!\}'
+    paths:
+      include:
+        - '*.blade.php'
