@@ -26,6 +26,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+try:
+    from pipeline.profiles import CI3, DEFAULT_QUALITY_SETS, FrameworkProfile
+except ModuleNotFoundError:
+    from profiles import CI3, DEFAULT_QUALITY_SETS, FrameworkProfile  # type: ignore[no-redef]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -125,12 +130,7 @@ _TARGET_VERSION_TO_LEVEL_SET: dict[str, str] = {
 }
 
 # Code quality sets always appended after the level chain
-_QUALITY_SETS: list[str] = [
-    "SetList::CODE_QUALITY",
-    "SetList::DEAD_CODE",
-    "SetList::EARLY_RETURN",
-    "SetList::TYPE_DECLARATION",
-]
+_QUALITY_SETS: list[str] = list(DEFAULT_QUALITY_SETS)
 
 # ---------------------------------------------------------------------------
 # rector.php template  (uses fluent Rector 1.x+ API)
@@ -144,12 +144,12 @@ declare(strict_types=1);
 use Rector\\Config\\RectorConfig;
 use Rector\\Set\\ValueObject\\LevelSetList;
 use Rector\\Set\\ValueObject\\SetList;
-
+{EXTRA_IMPORTS}
 return RectorConfig::configure()
     ->withPaths([
         '{TARGET_PATH}',
     ])
-    ->withSets([
+{AUTOLOAD_BLOCK}{SKIP_BLOCK}    ->withSets([
 {SETS_BLOCK}
     ]);
 """
@@ -329,6 +329,9 @@ class RectorConverter:
         output_path: Path,
         target_version: str = "8.3",
         exclude_dirs: list[str] | None = None,
+        profile: FrameworkProfile = CI3,
+        framework_sets: list[str] | None = None,
+        symbol_paths: list[Path] | None = None,
     ) -> ConversionResult:
         """
         Convert PHP files from *input_path* and write results to *output_path*.
@@ -343,6 +346,12 @@ class RectorConverter:
         target_version:
             Target PHP version string, e.g. ``"8.3"`` or ``"7.4"``.
             Determines which Rector level-set chain is generated.
+        profile:
+            Framework profile supplying quality sets, imports, and skip patterns.
+        framework_sets:
+            Extra Rector sets for this run, e.g. Laravel upgrade sets.
+        symbol_paths:
+            Directories Rector may read to resolve classes; not modified.
 
         Raises
         ------
@@ -387,11 +396,11 @@ class RectorConverter:
         # 3. Choose level sets based on detected versions and target
         detected_versions = set(version_map.values())
         level_sets = self._choose_level_sets(detected_versions, target_version)
-        all_sets = level_sets + _QUALITY_SETS
+        all_sets = level_sets + list(profile.quality_sets) + list(framework_sets or [])
         console.print(
             f"[dim]Level sets: "
             f"{level_sets[0]} … {level_sets[-1]} "
-            f"(+{len(_QUALITY_SETS)} quality sets)[/dim]"
+            f"(+{len(all_sets) - len(level_sets)} other sets)[/dim]"
         )
 
         # 4. Copy input -> output (never touch input/)
@@ -403,7 +412,7 @@ class RectorConverter:
         pre_hashes = _snapshot_dir(output_path)
 
         # 6. Write temporary rector.php to system temp dir
-        config_path = self._write_rector_config(output_path, all_sets)
+        config_path = self._write_rector_config(output_path, all_sets, profile, symbol_paths)
         console.print(f"[dim]Rector config: {config_path}[/dim]")
 
         # 7. Invoke Rector
@@ -539,7 +548,13 @@ class RectorConverter:
     # rector.php config generation
     # ------------------------------------------------------------------
 
-    def _write_rector_config(self, output_path: Path, all_sets: list[str]) -> Path:
+    def _write_rector_config(
+        self,
+        output_path: Path,
+        all_sets: list[str],
+        profile: FrameworkProfile = CI3,
+        symbol_paths: list[Path] | None = None,
+    ) -> Path:
         """
         Write a temporary ``rector.php`` using the fluent Rector 1.x+ API and
         return its ``Path``.
@@ -553,7 +568,27 @@ class RectorConverter:
         indent = " " * 8
         sets_block = "\n".join(f"{indent}{s}," for s in all_sets)
 
+        extra_imports = "".join(f"use {name};\n" for name in profile.rector_imports)
+        skip_block = ""
+        if profile.rector_skip:
+            skip_lines = "\n".join(f"{indent}'{p}'," for p in profile.rector_skip)
+            skip_block = f"    ->withSkip([\n{skip_lines}\n    ])\n"
+
+        autoload_block = ""
+        if symbol_paths:
+            autoload_lines = "\n".join(
+                f"{indent}'{p.resolve().as_posix()}'," for p in symbol_paths
+            )
+            # The first scan of framework sources can pass Rector's 120 s worker limit.
+            autoload_block = (
+                f"    ->withAutoloadPaths([\n{autoload_lines}\n    ])\n"
+                f"    ->withParallel({self._timeout})\n"
+            )
+
         config_content = _RECTOR_CONFIG_TEMPLATE.format(
+            AUTOLOAD_BLOCK=autoload_block,
+            EXTRA_IMPORTS=extra_imports,
+            SKIP_BLOCK=skip_block,
             TARGET_PATH=target,
             SETS_BLOCK=sets_block,
         )
@@ -990,6 +1025,9 @@ def run_conversion(
     rector_exe: Path | str = RECTOR_EXE,
     target_version: str = "8.3",
     exclude_dirs: list[str] | None = None,
+    profile: FrameworkProfile = CI3,
+    framework_sets: list[str] | None = None,
+    symbol_paths: list[Path] | None = None,
 ) -> ConversionResult:
     """
     Copy PHP files from *input_path* to *output_path* and run Rector.
@@ -1025,4 +1063,7 @@ def run_conversion(
         output_path=output_path,
         target_version=target_version,
         exclude_dirs=exclude_dirs,
+        profile=profile,
+        framework_sets=framework_sets,
+        symbol_paths=symbol_paths,
     )

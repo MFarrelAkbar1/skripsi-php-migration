@@ -21,6 +21,11 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
+try:
+    from pipeline.profiles import CI3, FrameworkProfile
+except ModuleNotFoundError:
+    from profiles import CI3, FrameworkProfile  # type: ignore[no-redef]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -230,13 +235,16 @@ class SemgrepScanner:
         rulesets: list[str] | None = None,
         timeout_sec: int = 300,
         exclude_dirs: list[str] | None = None,
+        profile: FrameworkProfile = CI3,
     ) -> None:
+        self._profile = profile
         self._exe = semgrep_exe if semgrep_exe is not None else _find_semgrep_exe()
         if rulesets is not None:
             self._rulesets = rulesets
             self._using_local_rules = True
         else:
             self._rulesets, self._using_local_rules = _resolve_rulesets()
+        self._rulesets = self._rulesets + [str(p) for p in profile.extra_semgrep_configs]
         self._timeout = timeout_sec
         self._exclude_dirs: list[str] = exclude_dirs or []
 
@@ -428,7 +436,9 @@ class SemgrepScanner:
         """
         haystack = (rule_id + " " + message[:100]).lower()
 
-        for keywords, label, controls, priority in _VULN_RULES:
+        for keywords, label, controls, priority in (
+            *self._profile.extra_vuln_rules, *_VULN_RULES
+        ):
             if any(kw in haystack for kw in keywords):
                 return label, controls, priority
 
@@ -556,6 +566,7 @@ def run_scan(
     semgrep_exe: Path | None = None,
     rulesets: list[str] | None = None,
     exclude_dirs: list[str] | None = None,
+    profile: FrameworkProfile = CI3,
 ) -> ScanResult:
     """
     Run a Semgrep security scan and return structured results.
@@ -576,7 +587,7 @@ def run_scan(
         Structured findings with ISO 27001 control mappings.
     """
     scanner = SemgrepScanner(
-        semgrep_exe=semgrep_exe, rulesets=rulesets, exclude_dirs=exclude_dirs
+        semgrep_exe=semgrep_exe, rulesets=rulesets, exclude_dirs=exclude_dirs, profile=profile
     )
     return scanner.run(target_path)
 

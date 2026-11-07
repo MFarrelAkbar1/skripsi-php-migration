@@ -176,8 +176,10 @@ class PHPAIEngine:
         ollama_base_url: str = OLLAMA_BASE_URL,
         timeout_sec: int = 120,
         temperature: float = _OLLAMA_OPTIONS["temperature"],
+        framework_context: str = "",
     ) -> None:
         self._model = model
+        self._framework_context = framework_context
         self._base_url = ollama_base_url.rstrip("/")
         self._timeout = timeout_sec
         self._temperature = temperature
@@ -334,6 +336,8 @@ class PHPAIEngine:
                     f"Semgrep rule: {finding.rule_id}. "
                     f"Finding: {finding.message}"
                 )
+                if self._framework_context:
+                    context_str += f" {self._framework_context}"
 
                 rec = self.analyze_snippet(
                     code=finding.code_snippet,
@@ -1182,6 +1186,7 @@ def run_ai_analysis(
     findings: list[ScanFinding],
     model: str = OLLAMA_MODEL,
     ollama_base_url: str = OLLAMA_BASE_URL,
+    framework_context: str = "",
 ) -> list[AIRecommendation]:
     """
     Run AI-assisted analysis on high-priority Semgrep findings.
@@ -1203,6 +1208,8 @@ def run_ai_analysis(
     ollama_base_url:
         Base URL for the local Ollama server.
         Defaults to ``"http://localhost:11434"``.
+    framework_context:
+        Short framework hint added to each prompt.  Empty leaves prompts unchanged.
 
     Returns
     -------
@@ -1210,7 +1217,9 @@ def run_ai_analysis(
         One ``AIRecommendation`` per eligible finding, in priority order.
         Empty list if Ollama is unreachable or no eligible findings exist.
     """
-    engine = PHPAIEngine(model=model, ollama_base_url=ollama_base_url)
+    engine = PHPAIEngine(
+        model=model, ollama_base_url=ollama_base_url, framework_context=framework_context
+    )
     return engine.analyze_findings(findings)
 
 

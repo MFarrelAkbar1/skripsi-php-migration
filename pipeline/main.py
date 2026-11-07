@@ -27,7 +27,7 @@ import shutil
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -61,6 +61,12 @@ try:
         composer_result_to_dict,
         run_composer_analysis,
     )
+    from pipeline.profiles import (
+        FRAMEWORK_CHOICES,
+        FrameworkConfigError,
+        FrameworkRun,
+        resolve_framework_run,
+    )
 except ModuleNotFoundError:
     from scanner import ScanResult, run_scan                    # type: ignore[no-redef]
     from converter import ConversionResult, run_conversion      # type: ignore[no-redef]
@@ -81,6 +87,12 @@ except ModuleNotFoundError:
         ComposerAnalysisResult,
         composer_result_to_dict,
         run_composer_analysis,
+    )
+    from profiles import (                                     # type: ignore[no-redef]
+        FRAMEWORK_CHOICES,
+        FrameworkConfigError,
+        FrameworkRun,
+        resolve_framework_run,
     )
 
 console = Console()
@@ -120,6 +132,7 @@ class PipelineResult:
     composer_analysis: ComposerAnalysisResult | None
     total_duration_sec: float
     started_at: datetime
+    framework: FrameworkRun = field(default_factory=FrameworkRun)
 
     @property
     def is_compliant(self) -> bool:
@@ -312,6 +325,24 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--framework",
+        dest="framework",
+        choices=FRAMEWORK_CHOICES,
+        default="ci3",
+        help="Framework profile of the input application (default: ci3).",
+    )
+    parser.add_argument(
+        "--target-laravel",
+        dest="target_laravel",
+        type=int,
+        default=None,
+        metavar="MAJOR",
+        help=(
+            "Laravel major version to upgrade to, e.g. 10. Only with --framework laravel. "
+            "Default: keep the current major and apply no Laravel upgrade rules."
+        ),
+    )
+    parser.add_argument(
         "--phpstan-level",
         dest="phpstan_level",
         type=int,
@@ -461,6 +492,7 @@ def run_pipeline(
     selected_models: list[str] | None = None,
     exclude_dirs: list[str] | None = None,
     phpstan_level: int = 5,
+    framework: FrameworkRun | None = None,
 ) -> PipelineResult:
     """
     Execute all six pipeline stages in order and return a ``PipelineResult``.
@@ -502,6 +534,8 @@ def run_pipeline(
         syntax validity per model.  Saves
         ``reports/llm_quality_<timestamp>.json`` and a bar chart PNG.
         Can be combined with ``compare_all``.
+    framework:
+        Resolved framework settings.  Defaults to the CI3 profile.
 
     Returns
     -------
@@ -511,6 +545,11 @@ def run_pipeline(
     started_at = datetime.now()
     t_start = time.perf_counter()
     reports_dir.mkdir(parents=True, exist_ok=True)
+
+    framework = framework if framework is not None else FrameworkRun()
+    profile = framework.profile
+    merged_excludes = list(dict.fromkeys([*profile.default_exclude_dirs, *(exclude_dirs or [])]))
+    exclude_dirs = merged_excludes or None
 
     # ------------------------------------------------------------------ #
     # Step 1 -- PRE-SCAN                                                    #
@@ -524,7 +563,7 @@ def run_pipeline(
     )
     pre_scan: ScanResult | None = None
     try:
-        pre_scan = run_scan(input_dir, exclude_dirs=exclude_dirs)
+        pre_scan = run_scan(input_dir, exclude_dirs=exclude_dirs, profile=profile)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]Pre-scan failed:[/bold red] {exc}")
 
@@ -545,6 +584,9 @@ def run_pipeline(
             output_path=output_dir,
             target_version=target_version,
             exclude_dirs=exclude_dirs,
+            profile=profile,
+            framework_sets=list(framework.rector_sets),
+            symbol_paths=list(framework.rector_symbol_paths),
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]Conversion failed:[/bold red] {exc}")
@@ -564,6 +606,7 @@ def run_pipeline(
         composer_analysis = run_composer_analysis(
             input_dir=input_dir,
             target_php=target_version,
+            overrides=framework.composer_overrides,
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]Composer analysis failed:[/bold red] {exc}")
@@ -581,7 +624,7 @@ def run_pipeline(
     post_scan: ScanResult | None = None
     if conversion is not None:
         try:
-            post_scan = run_scan(output_dir, exclude_dirs=exclude_dirs)
+            post_scan = run_scan(output_dir, exclude_dirs=exclude_dirs, profile=profile)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[bold red]Post-scan failed:[/bold red] {exc}")
     else:
@@ -607,6 +650,8 @@ def run_pipeline(
                 level=phpstan_level,
                 php_version=target_version,
                 exclude_dirs=exclude_dirs,
+                profile=profile,
+                scan_dirs=list(framework.phpstan_symbol_paths),
             )
         except Exception as exc:  # noqa: BLE001
             console.print(f"[bold red]Analysis failed:[/bold red] {exc}")
@@ -671,7 +716,9 @@ def run_pipeline(
         )
         if pre_scan and pre_scan.findings:
             try:
-                ai_recs = run_ai_analysis(pre_scan.findings, model=model)
+                ai_recs = run_ai_analysis(
+                    pre_scan.findings, model=model, framework_context=profile.ai_context
+                )
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[bold red]AI analysis failed:[/bold red] {exc}")
         elif analysis and analysis.errors:
@@ -685,7 +732,9 @@ def run_pipeline(
                     console.print(
                         f"[dim]Sending {len(phpstan_findings)} PHPStan findings to AI...[/dim]"
                     )
-                    ai_recs = run_ai_analysis(phpstan_findings, model=model)
+                    ai_recs = run_ai_analysis(
+                        phpstan_findings, model=model, framework_context=profile.ai_context
+                    )
                 else:
                     console.print("[dim]No readable PHPStan snippets -- AI skipped.[/dim]")
             except Exception as exc:  # noqa: BLE001
@@ -758,6 +807,7 @@ def run_pipeline(
         composer_analysis=composer_analysis,
         total_duration_sec=round(total_duration, 2),
         started_at=started_at,
+        framework=framework,
     )
 
     _print_final_summary(result)
@@ -922,6 +972,7 @@ def _save_pipeline_result(
     payload: dict = {
         "started_at": result.started_at.isoformat(),
         "total_duration_sec": result.total_duration_sec,
+        "framework": result.framework.to_dict(),
         "pre_scan": _scan_summary_to_dict(result.pre_scan),
         "post_scan": _scan_summary_to_dict(result.post_scan),
         "conversion": _conversion_summary_to_dict(result.conversion),
@@ -1105,6 +1156,17 @@ def main() -> None:
     """Parse CLI arguments and run the full migration pipeline."""
     args = _parse_args()
 
+    # Stop on impossible framework settings before output/ is cleaned.
+    try:
+        framework = resolve_framework_run(
+            args.framework, args.input_dir, args.target_php, args.target_laravel
+        )
+    except FrameworkConfigError as exc:
+        console.print(f"[bold red]Framework configuration error:[/bold red] {exc}")
+        sys.exit(2)
+    for warning in framework.warnings:
+        console.print(f"[yellow]WARNING:[/yellow] {warning}")
+
     # Flatten --models values: support both space-separated and comma-separated
     selected_models: list[str] | None = None
     if args.models:
@@ -1142,6 +1204,7 @@ def main() -> None:
             f"PHP hint      : [yellow]{args.php_version}[/yellow]\n"
             f"Target PHP    : [bold yellow]{args.target_php}[/bold yellow]\n"
             f"PHPStan level : [bold yellow]{args.phpstan_level}[/bold yellow]\n"
+            f"Framework     : [bold yellow]{args.framework}[/bold yellow]\n"
             f"Temperature   : [yellow]{args.temperature}[/yellow]\n"
             f"Context window: [yellow]{args.context_window}[/yellow] chars\n"
             f"Models filter : [yellow]{models_str}[/yellow]\n"
@@ -1171,6 +1234,7 @@ def main() -> None:
         selected_models=selected_models,
         exclude_dirs=args.exclude if args.exclude else None,
         phpstan_level=args.phpstan_level,
+        framework=framework,
     )
 
     sys.exit(0 if result.is_compliant else 1)

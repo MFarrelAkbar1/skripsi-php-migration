@@ -87,7 +87,7 @@ _KNOWN_MAPPINGS: dict[str, tuple[str, str, bool]] = {
     ),
     "laravel/framework": (
         "upgrade",
-        "laravel/framework >=9.0 required for PHP 8.x; update version constraint",
+        "laravel/framework accepts PHP 8 from 6.20, 7.29 and 8.12; 9.0 and newer require it",
         False,
     ),
     "vlucas/phpdotenv": (
@@ -157,8 +157,13 @@ class ComposerAnalyzer:
     and produces structured upgrade recommendations.
     """
 
-    def __init__(self, target_php: str = "8.3") -> None:
+    def __init__(
+        self,
+        target_php: str = "8.3",
+        overrides: dict[str, tuple[str, str, bool]] | None = None,
+    ) -> None:
         self._target_php = target_php
+        self._mappings = {**_KNOWN_MAPPINGS, **(overrides or {})}
 
     # ------------------------------------------------------------------
     # Public API
@@ -240,8 +245,8 @@ class ComposerAnalyzer:
         """Return a DependencyRecommendation for one composer dependency."""
         pkg_lower = package.lower()
 
-        if pkg_lower in _KNOWN_MAPPINGS:
-            action, suggestion, php8_safe = _KNOWN_MAPPINGS[pkg_lower]
+        if pkg_lower in self._mappings:
+            action, suggestion, php8_safe = self._mappings[pkg_lower]
             status = "safe" if php8_safe else action
         else:
             status = "manual_review"
@@ -356,6 +361,7 @@ def composer_result_to_dict(result: ComposerAnalysisResult) -> dict:
 def run_composer_analysis(
     input_dir: Path,
     target_php: str = "8.3",
+    overrides: dict[str, tuple[str, str, bool]] | None = None,
 ) -> ComposerAnalysisResult:
     """
     Run composer.json compatibility analysis and return structured results.
@@ -366,11 +372,13 @@ def run_composer_analysis(
         Directory that may contain a composer.json file.
     target_php:
         Target PHP version string (e.g. "8.3") for display purposes.
+    overrides:
+        Per-run entries that replace known package mappings.
 
     Returns
     -------
     ComposerAnalysisResult
         ``composer_found=False`` when no composer.json is present.
     """
-    analyzer = ComposerAnalyzer(target_php=target_php)
+    analyzer = ComposerAnalyzer(target_php=target_php, overrides=overrides)
     return analyzer.run(input_dir)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,11 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+try:
+    from pipeline.profiles import CI3, FrameworkProfile
+except ModuleNotFoundError:
+    from profiles import CI3, FrameworkProfile  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -73,68 +79,6 @@ _ERROR_RULES: list[tuple[tuple[str, ...], str, list[str]]] = [
 
 # Fallback when no rule matches: generic secure coding
 _DEFAULT_ISO: list[str] = ["A.8.28"]
-
-# ---------------------------------------------------------------------------
-# CI3 framework false-positive filter
-# ---------------------------------------------------------------------------
-# PHPStan cannot see CodeIgniter 3's dynamic architecture: the base classes
-# live in system/ (excluded), constants are defined at runtime in index.php,
-# and Composer vendor/ is not copied to output/.  All errors matching these
-# substrings are CI3 structural noise, not real application bugs.
-_CI3_NOISE_SUBSTRINGS: tuple[str, ...] = (
-    # CI3 base class hierarchy (system/ excluded from analysis)
-    "extends unknown class CI_",
-    "extends unknown class MX_",
-    # CI3 runtime constants (defined by index.php, invisible to static analysis)
-    "Constant ENVIRONMENT not found",
-    "Constant FCPATH not found",
-    "Constant APPPATH not found",
-    "Constant BASEPATH not found",
-    "Constant EXT not found",
-    # CI3 built-in magic properties accessed via $this->
-    "::$load.", "::$db.", "::$input.", "::$output.",
-    "::$config.", "::$session.", "::$uri.", "::$router.",
-    "::$security.", "::$form_validation.", "::$email.",
-    "::$upload.", "::$pagination.", "::$cache.", "::$lang.",
-    "::$benchmark.", "::$hooks.",
-    # CI3 URL / form / template helpers (loaded by CI3, not in PHPStan scope)
-    "Function base_url not found",
-    "Function site_url not found",
-    "Function redirect not found",
-    "Function anchor not found",
-    "Function form_open not found",
-    "Function form_close not found",
-    "Function set_value not found",
-    "Function form_error not found",
-    "Function validation_errors not found",
-    "Function get_instance not found",
-    "Function log_message not found",
-    "Function show_error not found",
-    "Function show_404 not found",
-    "Function html_escape not found",
-    "Function set_status_header not found",
-    "Function current_url not found",
-    "Function previous_url not found",
-    "Function strip_image_tags not found",
-    "Function encode_php_tags not found",
-    "Function function_usable not found",
-    "Function is_https not found",
-    "Function is_cli not found",
-    "Function remove_invisible_characters not found",
-    # Composer packages absent from output/ (vendor/ not copied by Rector).
-    # Matched on the bare namespace so both "unknown class X\..." and
-    # "Instantiated class X\... not found" phrasings are caught -- PHPStan
-    # uses different verbs depending on how the class is referenced.
-    "Dotenv\\",
-    "createUnsafeImmutable",
-    "createMutable",
-    "PhpOffice\\",
-    "Firebase\\",
-    "Google\\",
-    "chriskacerguis\\",
-    "Kreait\\",
-    "Ngekoding\\",
-)
 
 console = Console()
 
@@ -228,8 +172,13 @@ class PHPStanAnalyzer:
         self,
         phpstan_exe: str = PHPSTAN_EXE,
         timeout_sec: int = 300,
+        profile: FrameworkProfile = CI3,
+        scan_dirs: list[Path] | None = None,
     ) -> None:
         self._exe = phpstan_exe
+        self._profile = profile
+        self._scan_dirs = scan_dirs or []
+        self._neon_path: Path | None = None
         self._timeout = timeout_sec
 
     # ------------------------------------------------------------------
@@ -292,7 +241,11 @@ class PHPStanAnalyzer:
             php_version=php_version,
             exe=resolved_exe,
         )
-        exit_code, stdout, stderr, elapsed = self._invoke_phpstan(cmd)
+        try:
+            exit_code, stdout, stderr, elapsed = self._invoke_phpstan(cmd)
+        finally:
+            if self._neon_path is not None:
+                self._neon_path.unlink(missing_ok=True)
         raw = self._parse_phpstan_json(stdout, stderr, exit_code)
         errors, noise_count, noise_messages = self._build_errors(raw)
         errors.sort(key=lambda e: e.sort_key())
@@ -400,7 +353,19 @@ class PHPStanAnalyzer:
             "--no-progress",
             "--memory-limit=1G",
         ]
+        if self._scan_dirs:
+            cmd.append(f"--configuration={self._write_scan_config()}")
         return cmd
+
+    def _write_scan_config(self) -> Path:
+        """Write a temporary .neon listing symbol directories; PHPStan only reads them."""
+        lines = ["parameters:", "    scanDirectories:"]
+        lines += [f"        - '{p.resolve().as_posix()}'" for p in self._scan_dirs]
+        fd, name = tempfile.mkstemp(suffix="_phpstan.neon", prefix="pipeline_")
+        with open(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        self._neon_path = Path(name)
+        return self._neon_path
 
     # ------------------------------------------------------------------
     # PHPStan subprocess invocation
@@ -521,13 +486,12 @@ class PHPStanAnalyzer:
         return data
 
     # ------------------------------------------------------------------
-    # CI3 noise detection
+    # Framework noise detection
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _is_ci3_noise(message: str) -> bool:
-        """Return True if message is a CodeIgniter 3 framework false positive."""
-        return any(pattern in message for pattern in _CI3_NOISE_SUBSTRINGS)
+    def _is_framework_noise(self, message: str) -> bool:
+        """Return True if message is a false positive for the active profile."""
+        return self._profile.is_noise(message)
 
     # ------------------------------------------------------------------
     # Error classification
@@ -578,7 +542,7 @@ class PHPStanAnalyzer:
             for msg_entry in file_data.get("messages", []):
                 message: str = msg_entry.get("message", "")
                 line: int = msg_entry.get("line", 0) or 0
-                if self._is_ci3_noise(message):
+                if self._is_framework_noise(message):
                     noise_count += 1
                     noise_messages.append(f"{file_path}:{line} -- {message}")
                     continue
@@ -596,7 +560,7 @@ class PHPStanAnalyzer:
         # Top-level PHPStan errors (config issues, parse failures, etc.)
         for err in raw.get("errors", []):
             if isinstance(err, str) and err.strip():
-                if self._is_ci3_noise(err):
+                if self._is_framework_noise(err):
                     noise_count += 1
                     noise_messages.append(f"<phpstan>:0 -- {err}")
                     continue
@@ -786,6 +750,8 @@ def run_analysis(
     phpstan_exe: str = PHPSTAN_EXE,
     php_version: str = DEFAULT_PHP_VERSION,
     exclude_dirs: list[str] | None = None,
+    profile: FrameworkProfile = CI3,
+    scan_dirs: list[Path] | None = None,
 ) -> AnalysisResult:
     """
     Run PHPStan on *target_path* and return structured results.
@@ -812,7 +778,7 @@ def run_analysis(
         Sorted error list with ISO 27001:2022 control mappings,
         aggregate ``AnalysisSummary``, and PHPStan's raw JSON output.
     """
-    analyzer = PHPStanAnalyzer(phpstan_exe=phpstan_exe)
+    analyzer = PHPStanAnalyzer(phpstan_exe=phpstan_exe, profile=profile, scan_dirs=scan_dirs)
     return analyzer.run(
         target_path=target_path,
         level=level,
