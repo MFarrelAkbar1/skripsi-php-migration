@@ -289,6 +289,98 @@ Setelah folder `rules/` terisi, scanner otomatis menggunakannya (ditandai `(loca
 
 ---
 
+## Batas Versi PHP dan Framework
+
+Pipeline ini **mengubah sintaks PHP**, bukan memindahkan aplikasi ke framework lain. Versi PHP
+target dan versi framework adalah dua hal terpisah.
+
+### Versi PHP
+
+| | Didukung | Catatan |
+|---|---|---|
+| Sumber | PHP 5.x dan 7.x | `--php-version auto` (default), atau paksa dengan `--php-version 5`/`7` |
+| Target | 7.4, 8.0, 8.1, 8.2, 8.3, 8.5 | `--target-php`, default 8.3 |
+
+- **8.4 tidak ada di pilihan**, tetapi `--target-php 8.5` memakai set Rector `UP_TO_PHP_85` yang
+  kumulatif, jadi aturan 8.4 ikut diterapkan.
+- Target menentukan dua hal: set Rector terakhir yang dijalankan, dan `phpVersion` untuk PHPStan.
+- **Class Load Check (Step 4b) memakai PHP CLI yang terpasang**, bukan versi target. Hasil
+  pengujian di repo ini memakai PHP 8.5.1. Jika targetnya 8.1 tetapi PHP lokal 8.5, pemeriksaan
+  muat tetap berjalan di 8.5.
+- Rector hanya mengubah pola yang punya aturan. Perilaku runtime yang berubah antar versi (misalnya
+  hasil perbandingan string dengan angka sejak PHP 8.0) tidak terdeteksi, karena pipeline hanya
+  melakukan analisis statis.
+
+### CodeIgniter 3: bisakah ke PHP 8.5 tanpa CI4?
+
+Bisa, dalam arti **kode CI3 diubah supaya bisa dimuat di PHP 8.x**. Pipeline tidak melakukan
+migrasi CI3 ke CI4.
+
+- **CI4 adalah penulisan ulang total,** dengan struktur folder, namespace, routing, dan API
+  database yang berbeda. Pindah ke CI4 berarti perubahan arsitektur. Itu di luar cakupan penelitian
+  ini dan tidak bisa dilakukan Rector.
+- **Yang dilakukan pipeline:** folder `system/` (inti CI3) ikut dikonversi bersama `application/`.
+  Inti framework diperlakukan sebagai bagian dari kode aplikasi, jadi tidak ada versi resmi CI3
+  yang diganti atau di-upgrade.
+- **Status resmi CI3:** setahu saya, rilis terakhir CI3 adalah 3.1.13 (2022), dengan changelog yang
+  menyebut kompatibilitas PHP 8.1. Tidak ada rilis CI3 resmi yang menjamin PHP 8.2 sampai 8.5. MCK
+  memakai 3.1.11 dan CBT memakai 3.1.9, keduanya lebih lama dari itu.
+- **Hasil di MCK dan CBT dengan target 8.5:** `php -l` lolos semua.
+  - Dengan `--framework-core-level-only`, semua class bisa dimuat di PHP 8.5.1 (0 class rusak).
+  - Tanpa flag itu, set kualitas Rector merusak hierarki driver database CI3: 9 class rusak di MCK
+    dan 11 di CBT. Lihat `docs/framework_profiles.md` bagian 8.
+- **Yang belum terjamin:**
+  - Properti dinamis (`$this->load`, `$this->db`, dan sejenisnya) masih memicu deprecation sejak
+    PHP 8.2. Di PHP 8.x ini baru peringatan, tetapi direncanakan menjadi error di versi mayor
+    berikutnya.
+  - Aplikasi belum pernah dijalankan setelah konversi, jadi lolos dimuat **bukan** berarti semua
+    halaman berfungsi.
+- **Rekomendasi untuk CI3:** pakai `--framework-core-level-only`, lalu uji aplikasinya secara
+  manual di lingkungan non-production. Alternatif yang belum diuji di repo ini: ganti dulu
+  `system/` dengan CI 3.1.13, lalu jalankan pipeline.
+
+### Laravel
+
+Laravel berbeda dari CI3, karena versi framework mengikat versi PHP lewat Composer. Untuk PHP
+baru, Laravel-nya juga harus dinaikkan. Pipeline menangani ini dengan `--target-laravel`.
+
+| Laravel | PHP minimum | Status di pipeline |
+|---|---|---|
+| < 6 | - | Ditolak sebagai sumber |
+| 6, 7, 8 | 7.2 / 7.2 / 7.3 | Sumber yang dirancang; menerima PHP 8 mulai 6.20 / 7.29 / 8.12 |
+| 9 | 8.0 | Sumber diterima dengan peringatan "untested" |
+| 10 | 8.1 | sda |
+| 11, 12 | 8.2 | sda |
+| 13 | 8.3 | Target terbaru yang dikenal |
+
+- **Pipeline menolak kombinasi yang mustahil.** Contoh: `--target-laravel 11 --target-php 8.1`
+  ditolak karena Laravel 11 butuh PHP 8.2. Target Laravel yang lebih lama dari versi aplikasi juga
+  ditolak.
+- **Yang diubah otomatis:** set Rector `LARAVEL_x0` untuk setiap major antara versi sekarang dan
+  target, ditambah set PHP sesuai `--target-php`.
+- **Yang tidak diubah otomatis:**
+  - `composer.json`: pipeline hanya memberi saran versi `laravel/framework`.
+  - Paket pihak ketiga.
+  - Konfigurasi dan struktur folder baru, misalnya `bootstrap/app.php` gaya Laravel 11.
+  - Langkah manual di upgrade guide resmi.
+- **Tabel PHP minimum bukan jaminan,** karena hanya menunjukkan batas bawah constraint Composer.
+  Laravel 8 menerima `^8.0`, tetapi itu tidak menjamin aplikasinya berjalan baik di PHP 8.3, jadi
+  pipeline memberi peringatan.
+- **Belum teruji pada aplikasi nyata:** profil Laravel baru diuji pada aplikasi dummy 5 file. Detail
+  lengkap ada di `docs/framework_profiles.md` bagian 5 dan 6.
+
+Contoh:
+
+```bash
+# CI3 ke PHP 8.5 (inti framework hanya diberi set level PHP)
+python pipeline/main.py --target-php 8.5 --framework-core-level-only
+
+# Laravel 8 ke Laravel 12 di PHP 8.2
+python pipeline/main.py --framework laravel --target-laravel 12 --target-php 8.2
+```
+
+---
+
 ## Troubleshooting
 
 | Masalah | Solusi |

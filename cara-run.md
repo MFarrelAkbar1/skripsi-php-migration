@@ -37,6 +37,11 @@
   10. CI3: konversi system/ hanya dengan level set PHP, supaya driver database tetap bisa dimuat
   python pipeline/main.py --framework-core-level-only
 
+  11. Step 4b (Class Load Check) berjalan otomatis setelah PHPStan: setiap file class di output
+  dimuat dengan PHP CLI untuk mencari signature parent/child yang ditolak PHP. Hasilnya ada di
+  key "load_check" pada pipeline_result_<timestamp>.json. Untuk mematikannya:
+  python pipeline/main.py --skip-load-check
+
   Cek reports/ setelah selesai untuk iso_report_<timestamp>.json, pipeline_result_<timestamp>.json, dan
   llm_comparison_<timestamp>.json (kalau pakai --compare-all).
 
