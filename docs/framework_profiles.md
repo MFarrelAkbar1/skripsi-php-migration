@@ -153,14 +153,28 @@ laporan `mck_qwen_rerun` yang berisi 269 file hanya menghasilkan 12 error PHPSta
    2758, dan CBT dari 2354 menjadi 2340. Penyebab utamanya perubahan filter noise pada commit
    `831ca0f`. Total error ditambah noise pada MCK tetap 3144, sedangkan pada CBT berubah dari 2672
    menjadi 2673, dan selisih 1 ini belum ditelusuri.
-2. **Rector bermasalah pada run MCK.** Muncul pesan `Child process timed out after 120 seconds` dan
-   `Reached system errors count limit of 50, exiting...`, yang tidak ada di laporan `mck_qwen` dan
-   `mck_qwen_rerun2`. Penyebabnya belum ditelusuri.
-3. **Empat file berbeda dari output lama, dengan line ending diabaikan.** Penyebabnya belum
-   ditelusuri, jadi output baru belum tentu lebih benar:
-   - `output/mck_qwen`: `application/controllers/Indikator.php`
-   - `output/cbt_qwen`: `system/core/Security.php`, `system/core/Utf8.php`,
-     `system/database/drivers/postgre/postgre_result.php`
+2. **Rector kadang timeout pada MCK.** Run 2026-11-07 menampilkan `Child process timed out after
+   120 seconds` dan `Reached system errors count limit of 50, exiting...`. Run ulang 2026-11-08
+   tidak menampilkan pesan itu, tetapi hasilnya identik sampai ke byte-nya, jadi timeout ini tidak
+   mengubah output.
+3. **Empat file berbeda dari output lama, dengan line ending diabaikan.** Run 2026-11-07 dan run
+   ulang 2026-11-08 menghasilkan output yang sama persis (folder `regresi_*_ulang`), jadi
+   perbedaannya konsisten dan bukan hasil acak satu run.
+
+   | File | Output lama | Output sekarang | Penilaian |
+   |---|---|---|---|
+   | MCK `application/controllers/Indikator.php` | Menambah 8 deklarasi properti seperti `public $m_indikator` | Tidak menambahkannya | Output lama lebih baik. CI 3.1.11 tidak memakai `#[AllowDynamicProperties]`, jadi properti dinamis memicu deprecation di PHP 8.2 ke atas |
+   | CBT `system/core/Security.php` | Tidak ada cast | `(string)` pada `rawurldecode` dan dua `preg_replace_callback` | Output sekarang lebih baik untuk deprecation `null` di PHP 8.1 |
+   | CBT `system/core/Utf8.php` | Return type `string\|array\|null` pada `safe_ascii_for_xml` | Tanpa return type | Netral, keduanya berjalan |
+   | CBT `system/database/drivers/postgre/postgre_result.php` | `_fetch_assoc(): array` | `_fetch_assoc(): array\|false`, ditambah perubahan format docblock | Output sekarang lebih baik, karena `pg_fetch_assoc` mengembalikan `false` saat baris habis dan `array` akan memicu `TypeError` |
+
+   Yang sudah dipastikan sama antara run lama dan run sekarang: versi Rector (2.3.8) dan PHPStan
+   (2.1.40), `converter.py` (terakhir diubah 2026-05-09), level set yang dipakai, isi dataset
+   (commit terakhir MCK 2025-12-30 dan CBT 2026-05-07), dan jumlah file. Output lama juga ditulis
+   saat run-nya sendiri, tidak diubah sesudahnya. Penyebabnya belum diketahui. Dilihat dari bentuk
+   perubahannya, rule yang terlibat kemungkinan `CompleteDynamicPropertiesRector`,
+   `NullToStrictStringFuncCallArgRector`, dan rule return type, yang semuanya bergantung pada
+   inferensi tipe. Log Rector tidak mencatat nama rule per file, jadi ini belum dipastikan.
 
 **Laravel, pada aplikasi dummy:**
 
