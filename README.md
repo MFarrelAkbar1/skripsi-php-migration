@@ -325,19 +325,22 @@ migrasi CI3 ke CI4.
 - **Status resmi CI3:** setahu saya, rilis terakhir CI3 adalah 3.1.13 (2022), dengan changelog yang
   menyebut kompatibilitas PHP 8.1. Tidak ada rilis CI3 resmi yang menjamin PHP 8.2 sampai 8.5. MCK
   memakai 3.1.11 dan CBT memakai 3.1.9, keduanya lebih lama dari itu.
-- **Hasil di MCK dan CBT dengan target 8.5:** `php -l` lolos semua.
-  - Dengan `--framework-core-level-only`, semua class bisa dimuat di PHP 8.5.1 (0 class rusak).
-  - Tanpa flag itu, set kualitas Rector merusak hierarki driver database CI3: 9 class rusak di MCK
-    dan 11 di CBT. Lihat `docs/framework_profiles.md` bagian 8.
+- **Hasil di MCK dan CBT** (target 8.3, dimuat dan dijalankan di PHP 8.5.1): `php -l` lolos semua.
+  - Dengan `--framework-core-level-only`, semua class bisa dimuat (0 class rusak).
+  - Tanpa flag itu, set kualitas Rector merusak hierarki class di core CI3: 10 class rusak di MCK
+    dan 14 di CBT, termasuk loader HMVC di CBT.
+  - **Uji runtime CBT:** tanpa flag, semua halaman fatal, termasuk login. Dengan flag, perilakunya
+    identik dengan CBT asli yang tidak dimigrasi: login berhasil, dan kategori error sama di semua
+    214 request. Detail di `docs/framework_profiles.md` bagian 8 nomor 5 dan 6.
 - **Yang belum terjamin:**
   - Properti dinamis (`$this->load`, `$this->db`, dan sejenisnya) masih memicu deprecation sejak
-    PHP 8.2. Di PHP 8.x ini baru peringatan, tetapi direncanakan menjadi error di versi mayor
-    berikutnya.
-  - Aplikasi belum pernah dijalankan setelah konversi, jadi lolos dimuat **bukan** berarti semua
-    halaman berfungsi.
-- **Rekomendasi untuk CI3:** pakai `--framework-core-level-only`, lalu uji aplikasinya secara
-  manual di lingkungan non-production. Alternatif yang belum diuji di repo ini: ganti dulu
-  `system/` dengan CI 3.1.13, lalu jalankan pipeline.
+    PHP 8.2. Migrasi hanya mengurangi sebagian. Di PHP 8.x ini baru peringatan, tetapi
+    direncanakan menjadi error di versi mayor berikutnya.
+  - Uji runtime hanya membuka halaman dengan GET, tanpa mengisi form, dan baru dilakukan pada CBT.
+- **Rekomendasi untuk CI3:** pakai `--framework-core-level-only`, lalu uji aplikasinya di
+  lingkungan non-production. Contohnya dengan `experiments/runtime_smoke/` untuk aplikasi
+  sejenis CBT. Alternatif yang belum diuji di repo ini: ganti dulu `system/` dengan CI 3.1.13,
+  lalu jalankan pipeline.
 
 ### Laravel
 
@@ -372,7 +375,7 @@ baru, Laravel-nya juga harus dinaikkan. Pipeline menangani ini dengan `--target-
 Contoh:
 
 ```bash
-# CI3 ke PHP 8.5 (inti framework hanya diberi set level PHP)
+# CI3 ke PHP 8.5 (inti framework hanya diberi set level PHP; hasil di atas memakai target 8.3)
 python pipeline/main.py --target-php 8.5 --framework-core-level-only
 
 # Laravel 8 ke Laravel 12 di PHP 8.2
